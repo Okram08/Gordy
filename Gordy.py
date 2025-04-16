@@ -2,7 +2,6 @@ import logging
 import os
 import numpy as np
 import pandas as pd
-import talib
 import matplotlib.pyplot as plt
 from io import BytesIO
 from functools import lru_cache
@@ -53,6 +52,31 @@ def get_crypto_data(token: str, days: int = 30):
         logging.error(f"API Error for {token}: {str(e)}")
         return None
 
+# Custom functions to replace talib
+def compute_rsi(data, period=14):
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_macd(data, short_period=12, long_period=26, signal_period=9):
+    short_ema = data.ewm(span=short_period, min_periods=1, adjust=False).mean()
+    long_ema = data.ewm(span=long_period, min_periods=1, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal_line = macd.ewm(span=signal_period, min_periods=1, adjust=False).mean()
+    return macd, signal_line
+
+def compute_atr(high, low, close, period=14):
+    high_low = high - low
+    high_close = abs(high - close.shift())
+    low_close = abs(low - close.shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1)
+    tr_max = tr.max(axis=1)
+    atr = tr_max.rolling(window=period).mean()
+    return atr
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "🚀 Crypto Trading Bot Pro\n"
@@ -74,10 +98,10 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
 
-        # Calcul des indicateurs
-        df['rsi'] = talib.RSI(df['close'], 14)
-        df['macd'], df['signal'], _ = talib.MACD(df['close'])
-        df['atr'] = talib.ATR(df['high'], df['low'], df['close'], ATR_PERIOD)
+        # Calcul des indicateurs (RSI, MACD, ATR)
+        df['rsi'] = compute_rsi(df['close'], 14)
+        df['macd'], df['signal'] = compute_macd(df['close'])
+        df['atr'] = compute_atr(df['high'], df['low'], df['close'], ATR_PERIOD)
         df.dropna(inplace=True)
 
         # Séparation train/test
@@ -195,7 +219,7 @@ def main() -> None:
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
-        states={
+        states={ 
             CHOOSING: [MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_token)]
         },
         fallbacks=[]
