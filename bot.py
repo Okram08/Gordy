@@ -10,14 +10,19 @@ from telegram import Update, InputFile
 from telegram.ext import (
     Application,
     CommandHandler,
+    MessageHandler,
+    filters,
     ContextTypes,
-    Defaults
+    ConversationHandler
 )
 from pycoingecko import CoinGeckoAPI
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 import pandas_ta as ta
+
+# === États de la conversation ===
+ASK_TOKEN = 0
 
 # Configuration initiale
 load_dotenv()
@@ -91,6 +96,19 @@ def optimize_data_period(token: str) -> int:
         return 365 if market_cap > 1e10 else 90
     except:
         return 90  # Fallback
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "👋 Bienvenue sur le bot d'analyse crypto !\n"
+        "Quel token veux-tu analyser ?\n"
+        "Exemple : bitcoin, ethereum, solana ..."
+    )
+    return ASK_TOKEN
+
+async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    token = update.message.text.strip().lower()
+    await analyze_and_reply(update, token)
+    return ConversationHandler.END
 
 async def analyze_and_reply(update: Update, token: str):
     """Effectue toute l'analyse et répond à l'utilisateur"""
@@ -204,18 +222,16 @@ async def analyze_and_reply(update: Update, token: str):
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text("❌ Une erreur est survenue durant l'analyse")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Gère la commande /start"""
-    if not context.args:
-        await update.message.reply_text("❌ Usage: /start <crypto> (ex: /start bitcoin)")
-        return
-    
-    token = context.args[0].lower()
-    await analyze_and_reply(update, token)
-
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler('start', start))
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
+        },
+        fallbacks=[]
+    )
+    application.add_handler(conv_handler)
     application.run_polling()
 
 if __name__ == '__main__':
