@@ -185,14 +185,15 @@ async def analyze_and_reply(update: Update, token: str):
         plt.close()
 
         # Message final
-        message = (
-            f"📊 {token.upper()} - Analyse automatisée\n"
-            f"📅 Période données: {days}j | RSI: {rsi_period}p\n"
-            f"🎯 {direction}\n"
-            f Prix: {current_price:.2f}$\n"
-            f📈 TP: {tp:.2f}$ | 📉 SL: {sl:.2f}$\n"
-            f⚡ ATR: {current_atr:.2f}$"
-        )
+message = (
+    f"📊 {token.upper()} - Analyse automatisée\n"
+    f"📅 Période données: {days}j | RSI: {rsi_period}p\n"
+    f"🎯 {direction}\n"
+    f"💰 Prix: {current_price:.2f}$\n"  # Guillemet ajouté après f
+    f"📈 TP: {tp:.2f}$ | 📉 SL: {sl:.2f}$\n"
+    f"⚡ ATR: {current_atr:.2f}$"
+)
+
 
         await update.message.reply_photo(
             photo=InputFile(buf, filename='analysis.png'),
