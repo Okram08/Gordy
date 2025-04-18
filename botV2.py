@@ -21,10 +21,7 @@ from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 import pandas_ta as ta
 
-# === États de la conversation ===
 ASK_TOKEN = 0
-
-# Configuration initiale
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MODELS_DIR = 'models'
@@ -36,10 +33,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Hyperparamètres
 LOOKBACK = 12
 ATR_PERIOD = 14
-RISK_REWARD_RATIO = 1
+RISK_REWARD_RATIO = 2
 TRAIN_TEST_RATIO = 0.8
 
 @lru_cache(maxsize=100)
@@ -58,7 +54,7 @@ def compute_macd(data):
     return macd, signal
 
 def compute_atr(high, low, close):
-    return ta.atr(high, low, close, length=ATR_PERIOD)
+    return ta.atr(high, low, close, length=14)
 
 def detect_market_conditions(df):
     df['atr'] = compute_atr(df['high'], df['low'], df['close'])
@@ -68,11 +64,11 @@ def detect_market_conditions(df):
     adx = adx_data['ADX_14'].iloc[-1]
     plus_di = adx_data['DMP_14'].iloc[-1]
     minus_di = adx_data['DMN_14'].iloc[-1]
-
+    
     tendance = "neutre"
     if adx > 25:
         tendance = "haussière" if plus_di > minus_di else "baissière"
-
+    
     return volatilite, tendance
 
 def optimize_rsi_period(df):
@@ -111,7 +107,7 @@ async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def analyze_and_reply(update: Update, token: str):
     days = optimize_data_period(token)
     await update.message.reply_text(f"🔍 Analyse en cours pour {token} (période auto: {days}j)...")
-
+    
     try:
         ohlc = get_crypto_data(token, days)
         if not ohlc:
@@ -170,13 +166,21 @@ async def analyze_and_reply(update: Update, token: str):
         predicted_price = model.predict(np.array([last_sequence]))[0][0]
         predicted_price = scaler.inverse_transform([[predicted_price, 0, 0, 0]])[0][0]
         current_price = df['close'].iloc[-1]
+        prev_price = df['close'].iloc[-2]
         current_atr = df['atr'].iloc[-1]
 
         direction = "LONG 🟢" if predicted_price > current_price else "SHORT 🔴"
         tp = current_price + (current_atr * RISK_REWARD_RATIO) if direction.startswith("LONG") else current_price - (current_atr * RISK_REWARD_RATIO)
         sl = current_price - current_atr if direction.startswith("LONG") else current_price + current_atr
 
-        accuracy = 100 - np.mean(np.abs(y_test - model.predict(X_test).flatten()) / y_test) * 100
+        real_diff = current_price - prev_price
+        predicted_diff = predicted_price - prev_price
+
+        try:
+            precision_model = (1 - abs(real_diff - predicted_diff) / abs(real_diff)) * 100 if real_diff != 0 else 0
+            precision_model = max(0, min(100, precision_model))
+        except:
+            precision_model = 0
 
         fig, axs = plt.subplots(3, 1, figsize=(12, 10))
         df['close'].plot(ax=axs[0], title='Prix', color='blue')
@@ -184,7 +188,7 @@ async def analyze_and_reply(update: Update, token: str):
         axs[0].axhline(sl, color='red', ls='--', label='SL')
         axs[0].legend()
 
-        df['rsi'].plot(ax=axs[1], color='purple', title=f'RSI ({rsi_period} p)')
+        df['rsi'].plot(ax=axs[1], color='purple', title=f'RSI ({rsi_period} périodes)')
         axs[1].axhline(70, color='red', ls='--', alpha=0.5)
         axs[1].axhline(30, color='green', ls='--', alpha=0.5)
 
@@ -198,12 +202,13 @@ async def analyze_and_reply(update: Update, token: str):
 
         message = (
             f"📊 {token.upper()} - Signal IA\n"
-            f"📅 Période: {days}j | RSI: {rsi_period}p\n"
+            f"📅 Période données: {days}j | RSI: {rsi_period}p\n"
             f"🎯 {direction}\n"
-            f"💰 Prix: {current_price:.2f}$\n"
+            f"💰 Prix actuel: {current_price:.2f}$\n"
+            f"🤖 Prédiction: {predicted_price:.2f}$ | Variation prédite: {predicted_diff:+.2f}$\n"
             f"📈 TP: {tp:.2f}$ | 📉 SL: {sl:.2f}$\n"
             f"⚡ ATR: {current_atr:.2f}$\n"
-            f"🤖 Précision modèle: {accuracy:.2f}%"
+            f"📊 Précision estimation: {precision_model:.2f}%"
         )
 
         await update.message.reply_photo(
