@@ -35,8 +35,8 @@ logging.basicConfig(
 
 LOOKBACK = 12
 ATR_PERIOD = 14
-RISK_REWARD_RATIO = 2
 TRAIN_TEST_RATIO = 0.8
+MIN_CONFIDENCE_RETURN = 0.002  # seuil pour filtrer les signaux faibles
 
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
@@ -54,21 +54,18 @@ def compute_macd(data):
     return macd, signal
 
 def compute_atr(high, low, close):
-    return ta.atr(high, low, close, length=14)
+    return ta.atr(high, low, close, length=ATR_PERIOD)
 
 def detect_market_conditions(df):
     df['atr'] = compute_atr(df['high'], df['low'], df['close'])
     volatilite = df['atr'].iloc[-1] / df['close'].iloc[-1]
-
     adx_data = ta.adx(df['high'], df['low'], df['close'], length=14)
     adx = adx_data['ADX_14'].iloc[-1]
     plus_di = adx_data['DMP_14'].iloc[-1]
     minus_di = adx_data['DMN_14'].iloc[-1]
-
     tendance = "neutre"
     if adx > 25:
         tendance = "haussière" if plus_di > minus_di else "baissière"
-
     return volatilite, tendance
 
 def optimize_rsi_period(df):
@@ -131,7 +128,6 @@ async def analyze_and_reply(update: Update, token: str):
 
         features = ['rsi', 'macd', 'atr']
         target = 'return'
-
         scaler = MinMaxScaler()
         df_scaled = scaler.fit_transform(df[features])
 
@@ -142,8 +138,8 @@ async def analyze_and_reply(update: Update, token: str):
                 y.append(target_data[i])
             return np.array(X), np.array(y)
 
-        train_size = int(len(df_scaled) * TRAIN_TEST_RATIO)
         X, y = create_sequences(df_scaled, df[target].values)
+        train_size = int(len(X) * TRAIN_TEST_RATIO)
         X_train, y_train = X[:train_size], y[:train_size]
         X_test, y_test = X[train_size:], y[train_size:]
 
@@ -164,15 +160,21 @@ async def analyze_and_reply(update: Update, token: str):
             model.save(model_path)
 
         last_sequence = df_scaled[-LOOKBACK:]
-        last_sequence_reshaped = last_sequence.reshape(1, LOOKBACK, len(features))
-        predicted_return = model.predict(last_sequence_reshaped)[0][0]
+        predicted_return = model.predict(np.array([last_sequence]))[0][0]
+
+        if abs(predicted_return) < MIN_CONFIDENCE_RETURN:
+            await update.message.reply_text("⚠️ Signal trop faible, aucun trade recommandé.")
+            return
+
         current_price = df['close'].iloc[-1]
         predicted_price = current_price * np.exp(predicted_return)
-
         current_atr = df['atr'].iloc[-1]
         direction = "LONG 🟢" if predicted_return > 0 else "SHORT 🔴"
-        tp = current_price + (current_atr * RISK_REWARD_RATIO) if predicted_return > 0 else current_price - (current_atr * RISK_REWARD_RATIO)
-        sl = current_price - current_atr if predicted_return > 0 else current_price + current_atr
+
+        # TP et SL ajustés à la prédiction
+        delta = abs(predicted_price - current_price)
+        tp = predicted_price
+        sl = current_price - delta if predicted_return > 0 else current_price + delta
 
         fig, axs = plt.subplots(3, 1, figsize=(12, 10))
         df['close'].plot(ax=axs[0], title='Prix', color='blue')
@@ -185,7 +187,6 @@ async def analyze_and_reply(update: Update, token: str):
         axs[1].axhline(30, color='green', ls='--', alpha=0.5)
 
         df[['macd', 'signal']].plot(ax=axs[2], color=['orange', 'black'], title='MACD')
-
         plt.tight_layout()
         buf = BytesIO()
         plt.savefig(buf, format='png')
@@ -202,10 +203,7 @@ async def analyze_and_reply(update: Update, token: str):
             f"⚡ ATR: {current_atr:.2f}$"
         )
 
-        await update.message.reply_photo(
-            photo=InputFile(buf, filename='analysis.png'),
-            caption=message
-        )
+        await update.message.reply_photo(photo=InputFile(buf, filename='analysis.png'), caption=message)
         buf.close()
 
     except Exception as e:
