@@ -207,9 +207,10 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 def main() -> None:
+    # Configuration des valeurs par défaut pour les messages
     defaults = Defaults(
-        rate_limit=30,  # 30 requêtes/minute
-        block=False
+        parse_mode="HTML",  # Exemple de paramètre valide (optionnel)
+        disable_notification=False
     )
     
     application = Application.builder() \
