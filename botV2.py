@@ -107,7 +107,7 @@ async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def analyze_and_reply(update: Update, token: str):
     days = optimize_data_period(token)
     await update.message.reply_text(f"🔍 Analyse en cours pour {token} (période auto: {days}j)...")
-    
+
     try:
         ohlc = get_crypto_data(token, days)
         if not ohlc:
@@ -122,29 +122,30 @@ async def analyze_and_reply(update: Update, token: str):
         df['atr'] = compute_atr(df['high'], df['low'], df['close'])
         rsi_period = optimize_rsi_period(df)
         df['rsi'] = compute_rsi(df['close'], rsi_period)
+        df['return'] = np.log(df['close'] / df['close'].shift(1))
         df.dropna(inplace=True)
 
         if len(df) < LOOKBACK * 2:
             await update.message.reply_text("❌ Données insuffisantes")
             return
 
-        train_size = int(len(df) * TRAIN_TEST_RATIO)
-        train_df = df.iloc[:train_size]
-        test_df = df.iloc[train_size:]
+        features = ['rsi', 'macd', 'atr']
+        target = 'return'
 
         scaler = MinMaxScaler()
-        train_scaled = scaler.fit_transform(train_df[['close', 'rsi', 'macd', 'atr']])
-        test_scaled = scaler.transform(test_df[['close', 'rsi', 'macd', 'atr']])
+        df_scaled = scaler.fit_transform(df[features])
 
-        def create_sequences(data):
+        def create_sequences(data, target_data):
             X, y = [], []
             for i in range(LOOKBACK, len(data)):
                 X.append(data[i-LOOKBACK:i])
-                y.append(data[i, 0])
+                y.append(target_data[i])
             return np.array(X), np.array(y)
 
-        X_train, y_train = create_sequences(train_scaled)
-        X_test, y_test = create_sequences(test_scaled)
+        train_size = int(len(df_scaled) * TRAIN_TEST_RATIO)
+        X, y = create_sequences(df_scaled, df[target].values)
+        X_train, y_train = X[:train_size], y[:train_size]
+        X_test, y_test = X[train_size:], y[train_size:]
 
         model_path = os.path.join(MODELS_DIR, f'{token}_model.keras')
         if os.path.exists(model_path):
@@ -162,25 +163,15 @@ async def analyze_and_reply(update: Update, token: str):
             model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
             model.save(model_path)
 
-        last_sequence = test_scaled[-LOOKBACK:]
-        predicted_price = model.predict(np.array([last_sequence]))[0][0]
-        predicted_price = scaler.inverse_transform([[predicted_price, 0, 0, 0]])[0][0]
+        last_sequence = df_scaled[-LOOKBACK:]
+        predicted_return = model.predict(np.array([last_sequence]))[0][0]
         current_price = df['close'].iloc[-1]
-        prev_price = df['close'].iloc[-2]
+        predicted_price = current_price * np.exp(predicted_return)
+
         current_atr = df['atr'].iloc[-1]
-
-        direction = "LONG 🟢" if predicted_price > current_price else "SHORT 🔴"
-        tp = current_price + (current_atr * RISK_REWARD_RATIO) if direction.startswith("LONG") else current_price - (current_atr * RISK_REWARD_RATIO)
-        sl = current_price - current_atr if direction.startswith("LONG") else current_price + current_atr
-
-        real_diff = current_price - prev_price
-        predicted_diff = predicted_price - prev_price
-
-        try:
-            precision_model = (1 - abs(real_diff - predicted_diff) / abs(real_diff)) * 100 if real_diff != 0 else 0
-            precision_model = max(0, min(100, precision_model))
-        except:
-            precision_model = 0
+        direction = "LONG 🟢" if predicted_return > 0 else "SHORT 🔴"
+        tp = current_price + (current_atr * RISK_REWARD_RATIO) if predicted_return > 0 else current_price - (current_atr * RISK_REWARD_RATIO)
+        sl = current_price - current_atr if predicted_return > 0 else current_price + current_atr
 
         fig, axs = plt.subplots(3, 1, figsize=(12, 10))
         df['close'].plot(ax=axs[0], title='Prix', color='blue')
@@ -202,13 +193,12 @@ async def analyze_and_reply(update: Update, token: str):
 
         message = (
             f"📊 {token.upper()} - Signal IA\n"
-            f"📅 Période données: {days}j | RSI: {rsi_period}p\n"
+            f"🗓 Période: {days}j | RSI: {rsi_period}p\n"
             f"🎯 {direction}\n"
             f"💰 Prix actuel: {current_price:.2f}$\n"
-            f"🤖 Prédiction: {predicted_price:.2f}$ | Variation prédite: {predicted_diff:+.2f}$\n"
+            f"🤖 Prévision: {predicted_price:.2f}$ ({predicted_return*100:+.2f}%)\n"
             f"📈 TP: {tp:.2f}$ | 📉 SL: {sl:.2f}$\n"
-            f"⚡ ATR: {current_atr:.2f}$\n"
-            f"📊 Précision estimation: {precision_model:.2f}%"
+            f"⚡ ATR: {current_atr:.2f}$"
         )
 
         await update.message.reply_photo(
