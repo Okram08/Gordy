@@ -189,7 +189,7 @@ async def analyze_and_reply(update: Update, token: str):
             f"📊 {token.upper()} - Analyse automatisée\n"
             f"📅 Période données: {days}j | RSI: {rsi_period}p\n"
             f"🎯 {direction}\n"
-            f💰 Prix: {current_price:.2f}$\n"
+            f Prix: {current_price:.2f}$\n"
             f📈 TP: {tp:.2f}$ | 📉 SL: {sl:.2f}$\n"
             f⚡ ATR: {current_atr:.2f}$"
         )
