@@ -82,7 +82,7 @@ def compute_atr(high, low, close, period=14):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
-        "🚀 Crypto Trading Bot Pro\n"
+        "🚀 Gordy V2\n"
         "Entrez le symbole d'une cryptomonnaie (ex: bitcoin):"
     )
     return CHOOSING
@@ -200,7 +200,7 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
         # Message final
         message = (
-            f"📊 {user_input.upper()} - Analyse Professionnelle\n\n"
+            f"📊 {user_input.upper()} - Résultat Analyse\n\n"
             f"🎯 Direction: {direction}\n"
             f"💰 Prix actuel: {current_price:.2f}$\n"
             f"📈 TP: {tp:.2f}$ (+{(tp/current_price-1)*100:.1f}%)\n"
