@@ -41,13 +41,13 @@ logging.basicConfig(
 )
 
 # Hyperparamètres
-LOOKBACK = 24  # Réduit de 48 à 24
+LOOKBACK = 12  # Réduit pour minimiser les besoins en données
 ATR_PERIOD = 14
 RISK_REWARD_RATIO = 2
 TRAIN_TEST_RATIO = 0.8
 
 @lru_cache(maxsize=100)
-def get_crypto_data(token: str, days: int = 180):  # Récupère 180 jours par défaut
+def get_crypto_data(token: str, days: int = 365):  # Récupère 365 jours par défaut
     """Cache les requêtes API avec mémoization"""
     try:
         return cg.get_coin_ohlc_by_id(id=token, vs_currency='usd', days=days)
@@ -92,10 +92,10 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_chat_action(action='typing')
 
     try:
-        # Récupération des données (180 jours)
-        ohlc = get_crypto_data(user_input, days=180)
-        if not ohlc or len(ohlc) < LOOKBACK * 2:
-            await update.message.reply_text("❌ Données insuffisantes. Essayez avec une autre crypto ou une période plus longue.")
+        # Récupération des données (365 jours)
+        ohlc = get_crypto_data(user_input, days=365)
+        if not ohlc:
+            await update.message.reply_text("❌ Cryptomonnaie non trouvée ou erreur API.")
             return ConversationHandler.END
 
         df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
@@ -107,6 +107,11 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         df['macd'], df['signal'] = compute_macd(df['close'])
         df['atr'] = compute_atr(df['high'], df['low'], df['close'], ATR_PERIOD)
         df.dropna(inplace=True)
+
+        # Vérification après traitement des indicateurs
+        if len(df) < LOOKBACK * 2:
+            await update.message.reply_text("❌ Données insuffisantes après traitement. Essayez avec une période plus longue (ex: 1 an).")
+            return ConversationHandler.END
 
         # Séparation train/test
         train_size = int(len(df) * TRAIN_TEST_RATIO)
@@ -129,9 +134,9 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         X_train, y_train = create_sequences(train_scaled)
         X_test, y_test = create_sequences(test_scaled)
 
-        # Vérification finale des données
+        # Vérification finale des séquences
         if X_train.size == 0 or X_test.size == 0:
-            await update.message.reply_text("❌ Données insuffisantes après traitement. Essayez avec une autre crypto.")
+            await update.message.reply_text("❌ Données insuffisantes après création des séquences. Réduisez le LOOKBACK ou augmentez la période.")
             return ConversationHandler.END
 
         # Chargement/Entraînement du modèle
