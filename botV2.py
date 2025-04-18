@@ -20,6 +20,7 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 import pandas_ta as ta
+import traceback
 
 ASK_TOKEN = 0
 load_dotenv()
@@ -208,8 +209,13 @@ async def analyze_and_reply(update: Update, token: str):
         buf.close()
 
     except Exception as e:
-        logging.error(f"Erreur: {str(e)}")
-        await update.message.reply_text("❌ Une erreur est survenue durant l'analyse")
+        error_msg = traceback.format_exc()
+        logging.error(f"Erreur: {error_msg}")
+        await update.message.reply_text(
+            "❌ Une erreur est survenue durant l'analyse.\n"
+            f"🛠 Détail de l'erreur:\n```{str(e)}```",
+            parse_mode='Markdown'
+        )
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
