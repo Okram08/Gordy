@@ -154,7 +154,7 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
         # Visualisation
         fig, ax = plt.subplots(figsize=(10, 6))
-        df['close'].iloc[-48:].plot(ax=ax, title='Prix (48 dernières heures)')  <-- Focus sur court terme
+        df['close'].iloc[-48:].plot(ax=ax, title='Prix (48 dernières heures)')  #Focus sur court terme
         ax.axhline(tp, color='green', ls='--', label='TP')
         ax.axhline(sl, color='red', ls='--', label='SL')
         ax.legend()
@@ -187,4 +187,4 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     return ConversationHandler.END
 
-# ... (Le reste du code main() reste inchangé) ...
+
