@@ -165,7 +165,7 @@ async def analyze_and_reply(update: Update, token: str):
             model.save(model_path)
 
         last_sequence = df_scaled[-LOOKBACK:]
-        predicted_return = model.predict(last_sequence[np.newaxis, ...])[0][0]
+        predicted_return = model.predict(last_sequence.reshape(1, LOOKBACK, len(features)))[0][0]
         current_price = df['close'].iloc[-1]
         predicted_price = current_price * np.exp(predicted_return)
 
