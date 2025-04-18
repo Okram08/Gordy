@@ -121,7 +121,7 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         model = Sequential([
             Input(shape=(X_train.shape[1], X_train.shape[2])),
             LSTM(32, return_sequences=True),
-            Dropout(0.4),  <-- Réduit l'overfitting
+            Dropout(0.4),  # Réduit l'overfitting
             LSTM(16),
             Dropout(0.3),
             Dense(1)
