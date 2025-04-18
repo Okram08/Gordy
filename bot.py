@@ -41,13 +41,13 @@ logging.basicConfig(
 )
 
 # Hyperparamètres
-LOOKBACK = 24
+LOOKBACK = 24  # Réduit de 48 à 24
 ATR_PERIOD = 14
 RISK_REWARD_RATIO = 2
 TRAIN_TEST_RATIO = 0.8
 
 @lru_cache(maxsize=100)
-def get_crypto_data(token: str, days: int = 30):
+def get_crypto_data(token: str, days: int = 180):  # Récupère 180 jours par défaut
     """Cache les requêtes API avec mémoization"""
     try:
         return cg.get_coin_ohlc_by_id(id=token, vs_currency='usd', days=days)
@@ -92,10 +92,11 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_chat_action(action='typing')
 
     try:
-        # Récupération des données
-        ohlc = get_crypto_data(user_input, days=90)
-        if not ohlc:
-            raise ValueError("Cryptomonnaie non trouvée")
+        # Récupération des données (180 jours)
+        ohlc = get_crypto_data(user_input, days=180)
+        if not ohlc or len(ohlc) < LOOKBACK * 2:
+            await update.message.reply_text("❌ Données insuffisantes. Essayez avec une autre crypto ou une période plus longue.")
+            return ConversationHandler.END
 
         df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -128,9 +129,9 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         X_train, y_train = create_sequences(train_scaled)
         X_test, y_test = create_sequences(test_scaled)
 
-        # === VÉRIFICATION DES DONNÉES ===
-        if X_train.size == 0 or y_train.size == 0 or X_test.size == 0 or y_test.size == 0:
-            await update.message.reply_text("❌ Pas assez de données pour entraîner ou tester le modèle. Essayez avec une autre crypto ou une période plus longue.")
+        # Vérification finale des données
+        if X_train.size == 0 or X_test.size == 0:
+            await update.message.reply_text("❌ Données insuffisantes après traitement. Essayez avec une autre crypto.")
             return ConversationHandler.END
 
         # Chargement/Entraînement du modèle
@@ -139,7 +140,7 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             model = load_model(model_path)
         else:
             model = Sequential([
-                Input(shape=(X_train.shape[1], X_train.shape[2])),  # Amélioration Keras recommandée
+                Input(shape=(X_train.shape[1], X_train.shape[2])),
                 LSTM(64, return_sequences=True),
                 Dropout(0.3),
                 LSTM(32),
@@ -220,9 +221,9 @@ def main() -> None:
     if not TELEGRAM_TOKEN:
         raise ValueError("Token Telegram non trouvé. Vérifie le fichier .env.")
 
-    # Configuration des valeurs par défaut pour les messages (optionnel)
+    # Configuration des valeurs par défaut pour les messages
     defaults = Defaults(
-        parse_mode="HTML",  # ou "Markdown" selon tes besoins
+        parse_mode="HTML",
         disable_notification=False
     )
     
