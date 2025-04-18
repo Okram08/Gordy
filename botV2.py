@@ -178,14 +178,15 @@ async def analyze_and_reply(update: Update, token: str):
         buf.seek(0)
         plt.close()
 
-        message = (
-            f"📊 {token.upper()} - Signal IA
-"
-            f"🎯 Direction: {direction}\n"
-            f"💰 Prix actuel: {current_price:.2f}$\n"
-            f"📈 TP: {tp:.2f}$ | 📉 SL: {sl:.2f}$\n"
-            f"✅ Précision modèle: {acc*100:.2f}%"
-        )
+message = (
+    f"📊 {token.upper()} - Signal IA\n"
+    f"📅 Période: {days}j | RSI: {rsi_period}p\n"
+    f"🎯 {direction}\n"
+    f"💰 Prix: {current_price:.2f}$\n"
+    f"📈 TP: {tp:.2f}$ | 📉 SL: {sl:.2f}$\n"
+    f"⚡ ATR: {current_atr:.2f}$\n"
+    f"🤖 Précision modèle: {accuracy:.2f}%"
+)
 
         await update.message.reply_photo(photo=InputFile(buf, filename='analysis.png'), caption=message)
         buf.close()
