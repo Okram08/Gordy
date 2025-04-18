@@ -22,6 +22,8 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 
+import pandas_ta as ta  # Pour ADX
+
 # === ÉTAT DE CONVERSATION ===
 CHOOSING, WAITING_PERIOD = range(2)
 
@@ -41,19 +43,12 @@ logging.basicConfig(
     ]
 )
 
-# Hyperparamètres
 LOOKBACK = 12
 ATR_PERIOD = 14
 RISK_REWARD_RATIO = 2
 TRAIN_TEST_RATIO = 0.8
 
 # Périodes avec emojis
-PERIOD_OPTIONS = {
-    "🟢 30j": 30,
-    "🟡 90j": 90,
-    "🔴 180j": 180,
-    "🔵 1an": 365
-}
 PERIOD_KEYBOARD = [
     [InlineKeyboardButton("🟢 30j", callback_data='30')],
     [InlineKeyboardButton("🟡 90j", callback_data='90')],
@@ -68,14 +63,6 @@ def get_crypto_data(token: str, days: int = 365):
     except Exception as e:
         logging.error(f"API Error for {token}: {str(e)}")
         return None
-
-def compute_rsi(data, period=14):
-    delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
 
 def compute_macd(data, short_period=12, long_period=26, signal_period=9):
     short_ema = data.ewm(span=short_period, min_periods=1, adjust=False).mean()
@@ -92,6 +79,43 @@ def compute_atr(high, low, close, period=14):
     tr_max = tr.max(axis=1)
     atr = tr_max.rolling(window=period).mean()
     return atr
+
+def detect_market_conditions(df: pd.DataFrame, atr_period=14, adx_period=14):
+    """Détecte la volatilité et la tendance pour adapter le RSI"""
+    df['atr'] = compute_atr(df['high'], df['low'], df['close'], atr_period)
+    volatilite = df['atr'].iloc[-1] / df['close'].iloc[-1]  # Volatilité relative
+
+    adx_data = ta.adx(df['high'], df['low'], df['close'], length=adx_period)
+    adx = adx_data['ADX_14'].iloc[-1]
+    plus_di = adx_data['DMP_14'].iloc[-1]
+    minus_di = adx_data['DMN_14'].iloc[-1]
+
+    if adx > 25:
+        if plus_di > minus_di:
+            tendance = "haussière"
+        else:
+            tendance = "baissière"
+    else:
+        tendance = "neutre"
+
+    return volatilite, tendance
+
+def optimize_rsi_period(df: pd.DataFrame):
+    """Choisit automatiquement la période RSI optimale"""
+    volatilite, tendance = detect_market_conditions(df)
+    if tendance != "neutre" and volatilite < 0.02:
+        return 21  # Marché tendance avec faible volatilité → RSI plus lisse
+    elif volatilite > 0.05:
+        return 9   # Forte volatilité → RSI plus réactif
+    else:
+        return 14  # Par défaut
+
+def compute_rsi(data: pd.Series, period: int):
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
@@ -149,9 +173,15 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         df.set_index('timestamp', inplace=True)
 
         # Indicateurs
-        df['rsi'] = compute_rsi(df['close'], 14)
-        df['macd'], df['signal'] = compute_macd(df['close'])
+        macd, signal = compute_macd(df['close'])
+        df['macd'] = macd
+        df['signal'] = signal
         df['atr'] = compute_atr(df['high'], df['low'], df['close'], ATR_PERIOD)
+        df.dropna(inplace=True)
+
+        # RSI dynamique
+        rsi_period = optimize_rsi_period(df)
+        df['rsi'] = compute_rsi(df['close'], rsi_period)
         df.dropna(inplace=True)
 
         if len(df) < LOOKBACK * 2:
@@ -241,7 +271,7 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         df[['rsi']].plot(ax=axs[1], color='purple', legend=True)
         axs[1].axhline(70, color='red', ls='--', alpha=0.5)
         axs[1].axhline(30, color='green', ls='--', alpha=0.5)
-        axs[1].set_ylabel('RSI')
+        axs[1].set_ylabel(f'RSI ({rsi_period})')
 
         df[['macd', 'signal']].plot(ax=axs[2], color=['orange', 'black'], legend=True)
         axs[2].set_ylabel('MACD')
@@ -260,7 +290,8 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             f"📈 TP: {tp:.2f}$ (+{(tp/current_price-1)*100:.1f}%)\n"
             f"📉 SL: {sl:.2f}$ ({(sl/current_price-1)*100:.1f}%)\n"
             f"📊 Précision backtest: {test_accuracy:.1f}%\n"
-            f"⚡ Volatilité (ATR): {current_atr:.2f}$"
+            f"⚡ Volatilité (ATR): {current_atr:.2f}$\n"
+            f"🧠 RSI utilisé: {rsi_period} périodes"
         )
 
         await context.bot.send_photo(
