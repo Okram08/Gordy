@@ -54,7 +54,7 @@ def get_crypto_data(token: str, days: int = 7):  # Données sur 7 jours
             id=token, 
             vs_currency='usd', 
             days=days, 
-            interval='hourly'  <-- Données horaires
+            interval='hourly'  # Données horaires
         )
     except Exception as e:
         logging.error(f"API Error for {token}: {str(e)}")
