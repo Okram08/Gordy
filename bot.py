@@ -3,17 +3,18 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from io import BytesIO, StringIO
+from io import BytesIO
 from functools import lru_cache
 from dotenv import load_dotenv
-from telegram import Update, InputFile
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, 
-    CommandHandler, 
-    MessageHandler, 
-    filters, 
-    ContextTypes, 
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
     ConversationHandler,
+    CallbackQueryHandler,
     Defaults
 )
 from pycoingecko import CoinGeckoAPI
@@ -46,12 +47,19 @@ ATR_PERIOD = 14
 RISK_REWARD_RATIO = 2
 TRAIN_TEST_RATIO = 0.8
 
+# Périodes avec emojis
 PERIOD_OPTIONS = {
-    "30 jours": 30,
-    "90 jours": 90,
-    "180 jours": 180,
-    "1 an": 365
+    "🟢 30j": 30,
+    "🟡 90j": 90,
+    "🔴 180j": 180,
+    "🔵 1an": 365
 }
+PERIOD_KEYBOARD = [
+    [InlineKeyboardButton("🟢 30j", callback_data='30')],
+    [InlineKeyboardButton("🟡 90j", callback_data='90')],
+    [InlineKeyboardButton("🔴 180j", callback_data='180')],
+    [InlineKeyboardButton("🔵 1an", callback_data='365')]
+]
 
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int = 365):
@@ -95,10 +103,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "ℹ️ *Aide du bot*\n"
-        "- Envoyez le nom d'une cryptomonnaie (ex: bitcoin).\n"
-        "- Choisissez la période d’analyse parmi : 30, 90, 180 jours ou 1 an.\n"
-        "- Recevez une analyse technique, un graphique enrichi, et téléchargez les données au format CSV.\n"
-        "- Utilisez /stop pour arrêter la conversation."
+        "1. Envoyez le nom d'une crypto (ex: bitcoin)\n"
+        "2. Choisissez la période via les boutons 🟢🟡🔴🔵\n"
+        "3. Recevez l’analyse technique complète\n\n"
+        "Commandes disponibles:\n"
+        "/start - Démarrer l’analyse\n"
+        "/help - Afficher ce message\n"
+        "/stop - Annuler l’opération"
     )
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -110,26 +121,27 @@ async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ask_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['token'] = update.message.text.lower()
+    reply_markup = InlineKeyboardMarkup(PERIOD_KEYBOARD)
     await update.message.reply_text(
-        "⏳ Pour quelle période souhaitez-vous l’analyse ?\n"
-        "Répondez par : 30 jours, 90 jours, 180 jours ou 1 an."
+        "⏳ Choisissez la période d’analyse :",
+        reply_markup=reply_markup
     )
     return WAITING_PERIOD
 
 async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_period = update.message.text.strip().lower()
-    days = PERIOD_OPTIONS.get(user_period)
-    if not days:
-        await update.message.reply_text("❌ Période invalide. Veuillez répondre par : 30 jours, 90 jours, 180 jours ou 1 an.")
-        return WAITING_PERIOD
-
+    query = update.callback_query
+    await query.answer()
+    days = int(query.data)
     token = context.user_data.get('token')
-    await update.message.reply_chat_action(action='typing')
+    await query.edit_message_text(text=f"🔍 Analyse en cours pour {token} ({days}j)...")
 
     try:
         ohlc = get_crypto_data(token, days=days)
         if not ohlc:
-            await update.message.reply_text("❌ Cryptomonnaie non trouvée ou erreur API.")
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="❌ Cryptomonnaie non trouvée ou erreur API."
+            )
             return ConversationHandler.END
 
         df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
@@ -143,7 +155,10 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         df.dropna(inplace=True)
 
         if len(df) < LOOKBACK * 2:
-            await update.message.reply_text("❌ Données insuffisantes après traitement. Essayez une période plus longue.")
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="❌ Données insuffisantes après traitement. Essayez une période plus longue."
+            )
             return ConversationHandler.END
 
         # Train/test
@@ -166,7 +181,10 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         X_test, y_test = create_sequences(test_scaled)
 
         if X_train.size == 0 or X_test.size == 0:
-            await update.message.reply_text("❌ Données insuffisantes après création des séquences.")
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="❌ Données insuffisantes après création des séquences."
+            )
             return ConversationHandler.END
 
         model_path = os.path.join(MODELS_DIR, f'{token}_{days}_model.keras')
@@ -234,13 +252,6 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         buf.seek(0)
         plt.close(fig)
 
-        # Génération du CSV en mémoire
-        csv_buffer = StringIO()
-        df.to_csv(csv_buffer)
-        csv_buffer.seek(0)
-        csv_bytes = BytesIO(csv_buffer.getvalue().encode())
-        csv_bytes.name = f"{token}_{days}j_analyse.csv"
-
         # Message final
         message = (
             f"📊 {token.upper()} - Analyse sur {days} jours\n\n"
@@ -252,19 +263,18 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             f"⚡ Volatilité (ATR): {current_atr:.2f}$"
         )
 
-        await update.message.reply_photo(
+        await context.bot.send_photo(
+            chat_id=query.message.chat_id,
             photo=InputFile(buf, filename='analysis.png'),
             caption=message
         )
-        await update.message.reply_document(
-            document=InputFile(csv_bytes, filename=csv_bytes.name),
-            caption="📄 Données analysées (CSV)"
-        )
         buf.close()
-        csv_bytes.close()
     except Exception as e:
         logging.exception("Erreur critique:")
-        await update.message.reply_text(f"❌ Erreur: {str(e)[:200]}")
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"❌ Erreur: {str(e)[:200]}"
+        )
     return ConversationHandler.END
 
 def main() -> None:
@@ -284,7 +294,7 @@ def main() -> None:
         entry_points=[CommandHandler('start', start)],
         states={
             CHOOSING: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_period)],
-            WAITING_PERIOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_token)],
+            WAITING_PERIOD: [CallbackQueryHandler(analyze_token)],
         },
         fallbacks=[CommandHandler('stop', stop_command)]
     )
