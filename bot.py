@@ -41,7 +41,7 @@ logging.basicConfig(
 )
 
 # Hyperparamètres
-LOOKBACK = 48
+LOOKBACK = 24
 ATR_PERIOD = 14
 RISK_REWARD_RATIO = 2
 TRAIN_TEST_RATIO = 0.8
