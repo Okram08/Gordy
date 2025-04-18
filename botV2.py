@@ -20,7 +20,6 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 import pandas_ta as ta
-import traceback
 
 ASK_TOKEN = 0
 load_dotenv()
@@ -60,16 +59,16 @@ def compute_atr(high, low, close):
 def detect_market_conditions(df):
     df['atr'] = compute_atr(df['high'], df['low'], df['close'])
     volatilite = df['atr'].iloc[-1] / df['close'].iloc[-1]
-    
+
     adx_data = ta.adx(df['high'], df['low'], df['close'], length=14)
     adx = adx_data['ADX_14'].iloc[-1]
     plus_di = adx_data['DMP_14'].iloc[-1]
     minus_di = adx_data['DMN_14'].iloc[-1]
-    
+
     tendance = "neutre"
     if adx > 25:
         tendance = "haussière" if plus_di > minus_di else "baissière"
-    
+
     return volatilite, tendance
 
 def optimize_rsi_period(df):
@@ -165,7 +164,8 @@ async def analyze_and_reply(update: Update, token: str):
             model.save(model_path)
 
         last_sequence = df_scaled[-LOOKBACK:]
-        predicted_return = model.predict(last_sequence.reshape(1, LOOKBACK, len(features)))[0][0]
+        last_sequence_reshaped = last_sequence.reshape(1, LOOKBACK, len(features))
+        predicted_return = model.predict(last_sequence_reshaped)[0][0]
         current_price = df['close'].iloc[-1]
         predicted_price = current_price * np.exp(predicted_return)
 
@@ -209,13 +209,8 @@ async def analyze_and_reply(update: Update, token: str):
         buf.close()
 
     except Exception as e:
-        error_msg = traceback.format_exc()
-        logging.error(f"Erreur: {error_msg}")
-        await update.message.reply_text(
-            "❌ Une erreur est survenue durant l'analyse.\n"
-            f"🛠 Détail de l'erreur:\n```{str(e)}```",
-            parse_mode='Markdown'
-        )
+        logging.error(f"Erreur: {str(e)}")
+        await update.message.reply_text("❌ Une erreur est survenue durant l'analyse.\n🛠 Détail de l'erreur:\n" + str(e))
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
