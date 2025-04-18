@@ -93,7 +93,7 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     try:
         # Récupération des données
-        ohlc = get_crypto_data(user_input)
+        ohlc = get_crypto_data(user_input, days=90)
         if not ohlc:
             raise ValueError("Cryptomonnaie non trouvée")
 
