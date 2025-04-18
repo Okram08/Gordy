@@ -19,8 +19,9 @@ from telegram.ext import (
 from pycoingecko import CoinGeckoAPI
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 
+# === ÉTAT DE CONVERSATION ===
 CHOOSING = 0
 
 # Configuration initiale
@@ -127,13 +128,19 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         X_train, y_train = create_sequences(train_scaled)
         X_test, y_test = create_sequences(test_scaled)
 
+        # === VÉRIFICATION DES DONNÉES ===
+        if X_train.size == 0 or y_train.size == 0 or X_test.size == 0 or y_test.size == 0:
+            await update.message.reply_text("❌ Pas assez de données pour entraîner ou tester le modèle. Essayez avec une autre crypto ou une période plus longue.")
+            return ConversationHandler.END
+
         # Chargement/Entraînement du modèle
         model_path = os.path.join(MODELS_DIR, f'{user_input}_model.keras')
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
             model = Sequential([
-                LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])),
+                Input(shape=(X_train.shape[1], X_train.shape[2])),  # Amélioration Keras recommandée
+                LSTM(64, return_sequences=True),
                 Dropout(0.3),
                 LSTM(32),
                 Dropout(0.2),
@@ -209,9 +216,13 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 def main() -> None:
-    # Configuration des valeurs par défaut pour les messages
+    # Vérification du token
+    if not TELEGRAM_TOKEN:
+        raise ValueError("Token Telegram non trouvé. Vérifie le fichier .env.")
+
+    # Configuration des valeurs par défaut pour les messages (optionnel)
     defaults = Defaults(
-        parse_mode="HTML",  # Exemple de paramètre valide (optionnel)
+        parse_mode="HTML",  # ou "Markdown" selon tes besoins
         disable_notification=False
     )
     
