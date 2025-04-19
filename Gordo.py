@@ -24,6 +24,7 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.callbacks import TensorBoard
 from datetime import datetime
+import telegram
 
 ASK_TOKEN = 0
 load_dotenv()
@@ -40,6 +41,10 @@ logging.basicConfig(
 LOOKBACK = 24
 TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
+
+# Créer une instance du bot
+bot = telegram.Bot(token=TELEGRAM_TOKEN)
+CHAT_ID = "TON_CHAT_ID"  # Remplacer par ton chat_id Telegram
 
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
@@ -93,11 +98,13 @@ async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
+    bot.send_message(chat_id=CHAT_ID, text=f"Début de l'analyse pour {token}...")
 
     try:
         ohlc = get_crypto_data(token, 30)
         if not ohlc:
             await update.message.reply_text("❌ Token non trouvé")
+            bot.send_message(chat_id=CHAT_ID, text=f"Erreur : Token non trouvé pour {token}")
             return
 
         df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
@@ -120,6 +127,7 @@ async def analyze_and_reply(update: Update, token: str):
 
         if os.path.exists(model_path):
             model = load_model(model_path)
+            bot.send_message(chat_id=CHAT_ID, text=f"Modèle chargé pour {token}")
         else:
             model = Sequential([
                 Input(shape=(X_train.shape[1], X_train.shape[2])),
@@ -130,10 +138,11 @@ async def analyze_and_reply(update: Update, token: str):
                 Dense(3, activation='softmax')
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
+            bot.send_message(chat_id=CHAT_ID, text=f"Entraînement du modèle pour {token}...")
             # Entraîne le modèle avec TensorBoard callback
             model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0, callbacks=[tensorboard_callback])
             model.save(model_path)
+            bot.send_message(chat_id=CHAT_ID, text=f"Modèle entraîné et sauvegardé pour {token}")
 
         last_sequence = X_test[-1:]
         prediction = model.predict(last_sequence, verbose=0)[0]
@@ -156,10 +165,12 @@ async def analyze_and_reply(update: Update, token: str):
         )
 
         await update.message.reply_text(message)
+        bot.send_message(chat_id=CHAT_ID, text=f"📊 {token.upper()} - Signal IA:\n{message}")
 
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
+        bot.send_message(chat_id=CHAT_ID, text=f"Erreur : {str(e)}")
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
