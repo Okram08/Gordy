@@ -138,14 +138,13 @@ async def analyze_and_reply(update: Update, token: str):
         tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
         sl = current_price - atr if pred_class == 2 else (current_price + atr if pred_class == 0 else current_price)
 
-        message = (
-            f"📊 {token.upper()} - Signal IA
-"
-            f"🎯 Direction: {direction}\n"
-            f"📈 Confiance: {confidence*100:.2f}%\n"
-            f"💰 Prix actuel: {current_price:.2f}$\n"
-            f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
-        )
+message = (
+    f"📊 {token.upper()} - Signal IA\n"
+    f"🎯 Direction: {direction}\n"
+    f"📈 Confiance: {confidence*100:.2f}%\n"
+    f"💰 Prix actuel: {current_price:.2f}$\n"
+    f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
+)
 
         await update.message.reply_text(message)
 
