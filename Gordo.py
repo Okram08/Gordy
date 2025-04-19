@@ -22,13 +22,14 @@ import pandas_ta as ta
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
 from datetime import datetime
-from sklearn.metrics import accuracy_score
+import json
 
 # Constants
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MODELS_DIR = 'models'
+HISTORY_FILE = 'analysis_history.json'
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 cg = CoinGeckoAPI()
@@ -40,6 +41,18 @@ logging.basicConfig(
 LOOKBACK = 24
 TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
+
+# Load or create history file
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, 'r') as f:
+            return json.load(f)
+    else:
+        return []
+
+def save_history(history):
+    with open(HISTORY_FILE, 'w') as f:
+        json.dump(history, f, indent=4)
 
 # Caching crypto data
 @lru_cache(maxsize=100)
@@ -167,6 +180,21 @@ async def analyze_and_reply(update: Update, token: str):
         tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
         sl = current_price - atr if pred_class == 2 else (current_price + atr if pred_class == 0 else current_price)
 
+        # Record the analysis result
+        history = load_history()
+        result = {
+            'token': token,
+            'timestamp': str(datetime.now()),
+            'direction': direction,
+            'confidence': confidence,
+            'pred_class': pred_class,
+            'current_price': current_price,
+            'tp': tp,
+            'sl': sl
+        }
+        history.append(result)
+        save_history(history)
+
         message = (
             f"📊 {token.upper()} - Signal IA\n"
             f"🎯 Direction: {direction}\n"
@@ -182,6 +210,21 @@ async def analyze_and_reply(update: Update, token: str):
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
+# Command to retrieve the analysis history
+async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    history = load_history()
+    if not history:
+        await update.message.reply_text("❌ Aucun historique d'analyse trouvé.")
+        return
+
+    history_message = "📊 Récapitulatif des analyses précédentes :\n\n"
+    for entry in history[-5:]:  # Show the last 5 analyses
+        history_message += f"Token: {entry['token']} | Date: {entry['timestamp']}\n"
+        history_message += f"Direction: {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
+        history_message += f"Prix actuel: {entry['current_price']:.2f}$ | TP: {entry['tp']:.2f}$ | SL: {entry['sl']:.2f}$\n\n"
+
+    await update.message.reply_text(history_message)
+
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     conv_handler = ConversationHandler(
@@ -192,6 +235,7 @@ def main() -> None:
         fallbacks=[]
     )
     application.add_handler(conv_handler)
+    application.add_handler(CommandHandler('historique', get_history))  # New command for history
     application.run_polling()
 
 if __name__ == '__main__':
