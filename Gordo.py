@@ -55,8 +55,15 @@ def convert_to_float(value):
 # Charger l'historique des analyses
 def load_history():
     if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, 'r') as f:
-            return json.load(f)
+        try:
+            with open(HISTORY_FILE, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            logging.error(f"Erreur de formatage dans le fichier {HISTORY_FILE}, réinitialisation.")
+            # Si erreur JSON, vider le fichier pour éviter une boucle infinie
+            with open(HISTORY_FILE, 'w') as f:
+                json.dump([], f)
+            return []
     else:
         return []
 
@@ -66,8 +73,11 @@ def save_history(history):
     history = convert_to_float(history)
     
     # Enregistrement dans le fichier JSON
-    with open(HISTORY_FILE, 'w') as f:
-        json.dump(history, f, indent=4)
+    try:
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=4)
+    except Exception as e:
+        logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
 
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
