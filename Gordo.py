@@ -31,7 +31,7 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 
 cg = CoinGeckoAPI()
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
@@ -113,6 +113,7 @@ async def analyze_and_reply(update: Update, token: str):
         model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
         if os.path.exists(model_path):
             model = load_model(model_path)
+            logging.info(f"Modèle chargé depuis {model_path}")
         else:
             model = Sequential([
                 Input(shape=(X_train.shape[1], X_train.shape[2])),
@@ -123,13 +124,20 @@ async def analyze_and_reply(update: Update, token: str):
                 Dense(3, activation='softmax')
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
+            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=1, validation_split=0.1)
             model.save(model_path)
+            logging.info(f"Nouveau modèle entraîné et sauvegardé dans {model_path}")
+
+        loss, acc = model.evaluate(X_test, y_test, verbose=0)
+        logging.info(f"Évaluation du modèle - Précision: {acc*100:.2f}% | Perte: {loss:.4f}")
 
         last_sequence = X_test[-1:]
         prediction = model.predict(last_sequence, verbose=0)[0]
         pred_class = np.argmax(prediction)
         confidence = prediction[pred_class]
+
+        logging.info(f"Prédictions brutes: {prediction}")
+        logging.info(f"Classe prédite: {pred_class} avec confiance {confidence:.4f}")
 
         direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
         current_price = df['close'].iloc[-1]
@@ -140,7 +148,8 @@ async def analyze_and_reply(update: Update, token: str):
 
         message = (
             f"📊 {token.upper()} - Signal IA\n"
-            f"🎯 Direction: {direction}\n"
+            f"🗓 Période: 30j | RSI: 14p\n"
+            f"🎯 {direction}\n"
             f"📈 Confiance: {confidence*100:.2f}%\n"
             f"💰 Prix actuel: {current_price:.2f}$\n"
             f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
