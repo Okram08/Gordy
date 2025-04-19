@@ -23,15 +23,13 @@ from tensorflow.keras.callbacks import TensorBoard
 import pandas_ta as ta
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
-import time
+import datetime
 
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MODELS_DIR = 'models'
-LOG_DIR = 'logs/fit'
 os.makedirs(MODELS_DIR, exist_ok=True)
-os.makedirs(LOG_DIR, exist_ok=True)
 
 cg = CoinGeckoAPI()
 logging.basicConfig(
@@ -127,12 +125,11 @@ async def analyze_and_reply(update: Update, token: str):
                 Dense(3, activation='softmax')
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-            
-            # Setup TensorBoard callback
-            tensorboard_callback = TensorBoard(log_dir=LOG_DIR, histogram_freq=1)
-            
-            # Train the model with TensorBoard callback
-            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=1, callbacks=[tensorboard_callback])
+
+            log_dir = os.path.join("logs", "fit", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+            tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
+
+            model.fit(X_train, y_train, epochs=20, batch_size=32, validation_split=0.2, callbacks=[tensorboard_callback], verbose=1)
             model.save(model_path)
 
         last_sequence = X_test[-1:]
