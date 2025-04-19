@@ -2,6 +2,7 @@ import logging
 import os
 import numpy as np
 import pandas as pd
+from io import BytesIO
 from functools import lru_cache
 from dotenv import load_dotenv
 from telegram import Update
@@ -20,7 +21,10 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 import pandas_ta as ta
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
+from datetime import datetime
+from sklearn.metrics import accuracy_score
 
+# Constants
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -37,6 +41,7 @@ LOOKBACK = 24
 TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
 
+# Caching crypto data
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
     try:
@@ -45,6 +50,7 @@ def get_crypto_data(token: str, days: int):
         logging.error(f"API Error for {token}: {str(e)}")
         return None
 
+# Technical indicators
 def compute_macd(data):
     short_ema = data.ewm(span=12, adjust=False).mean()
     long_ema = data.ewm(span=26, adjust=False).mean()
@@ -58,6 +64,7 @@ def compute_rsi(data, period=14):
 def compute_atr(high, low, close):
     return ta.atr(high, low, close, length=14)
 
+# Label generation
 def generate_labels(df):
     df['return'] = np.log(df['close'] / df['close'].shift(1))
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
@@ -65,6 +72,7 @@ def generate_labels(df):
     df['label'] = df['label'] + 1  # Convert to 0, 1, 2 (down, neutral, up)
     return df
 
+# Prepare data with MinMax scaling and labels
 def prepare_data(df, features):
     scaler = MinMaxScaler()
     df_scaled = scaler.fit_transform(df[features])
@@ -78,15 +86,30 @@ def prepare_data(df, features):
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
+# Validate token input
+def is_valid_token(token: str) -> bool:
+    try:
+        cg.get_coin_by_id(id=token)
+        return True
+    except:
+        return False
+
+# Telegram bot commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
     return ASK_TOKEN
 
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     token = update.message.text.strip().lower()
+    
+    if not is_valid_token(token):
+        await update.message.reply_text(f"❌ Token {token} non trouvé. Essaie un autre token.")
+        return ASK_TOKEN  # Retry
+
     await analyze_and_reply(update, token)
     return ConversationHandler.END  # End the conversation after analysis
 
+# Perform analysis and send result
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
 
@@ -100,14 +123,17 @@ async def analyze_and_reply(update: Update, token: str):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
 
+        # Compute indicators
         df['macd'], df['signal'] = compute_macd(df['close'])
         df['rsi'] = compute_rsi(df['close'])
         df['atr'] = compute_atr(df['high'], df['low'], df['close'])
         df = generate_labels(df)
 
+        # Feature selection
         features = ['rsi', 'macd', 'atr']
         X_train, X_test, y_train, y_test = prepare_data(df, features)
 
+        # Model path
         model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
 
         if os.path.exists(model_path):
@@ -123,15 +149,17 @@ async def analyze_and_reply(update: Update, token: str):
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-            # Entraîne le modèle sans TensorBoard callback
+            # Train the model
             model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
             model.save(model_path)
 
+        # Evaluate the model
         last_sequence = X_test[-1:]
         prediction = model.predict(last_sequence, verbose=0)[0]
         pred_class = np.argmax(prediction)
         confidence = prediction[pred_class]
 
+        # Signal calculation
         direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
         current_price = df['close'].iloc[-1]
         atr = df['atr'].iloc[-1]
@@ -147,7 +175,7 @@ async def analyze_and_reply(update: Update, token: str):
             f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
         )
 
-        # Envoi du message final
+        # Send final message
         await update.message.reply_text(message)
 
     except Exception as e:
