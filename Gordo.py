@@ -20,16 +20,18 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 from tensorflow.keras.callbacks import TensorBoard
-import datetime
 import pandas_ta as ta
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
+import time
 
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MODELS_DIR = 'models'
+LOG_DIR = 'logs/fit'
 os.makedirs(MODELS_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
 
 cg = CoinGeckoAPI()
 logging.basicConfig(
@@ -126,18 +128,11 @@ async def analyze_and_reply(update: Update, token: str):
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
             
-            # Créer un log TensorBoard horodaté
-            log_dir = f"logs/{token}/{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-            tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
-
-            # Entraînement du modèle avec callback pour TensorBoard
-            model.fit(
-                X_train, y_train,
-                epochs=20,
-                batch_size=32,
-                verbose=1,
-                callbacks=[tensorboard_callback]  # Ajout du callback TensorBoard
-            )
+            # Setup TensorBoard callback
+            tensorboard_callback = TensorBoard(log_dir=LOG_DIR, histogram_freq=1)
+            
+            # Train the model with TensorBoard callback
+            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=1, callbacks=[tensorboard_callback])
             model.save(model_path)
 
         last_sequence = X_test[-1:]
