@@ -57,7 +57,9 @@ def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, 'r') as f:
-                return json.load(f)
+                history = json.load(f)
+                logging.info(f"Historique chargé avec {len(history)} éléments.")
+                return history
         except json.JSONDecodeError:
             logging.error(f"Erreur de formatage dans le fichier {HISTORY_FILE}, réinitialisation.")
             # Si erreur JSON, vider le fichier pour éviter une boucle infinie
@@ -65,6 +67,7 @@ def load_history():
                 json.dump([], f)
             return []
     else:
+        logging.info(f"Aucun fichier historique trouvé, création de {HISTORY_FILE}.")
         return []
 
 # Sauvegarder l'historique des analyses
@@ -76,6 +79,7 @@ def save_history(history):
     try:
         with open(HISTORY_FILE, 'w') as f:
             json.dump(history, f, indent=4)
+        logging.info(f"Historique sauvegardé avec {len(history)} éléments.")
     except Exception as e:
         logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
 
