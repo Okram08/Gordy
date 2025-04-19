@@ -2,11 +2,9 @@ import logging
 import os
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from io import BytesIO
 from functools import lru_cache
 from dotenv import load_dotenv
-from telegram import Update, InputFile
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -20,11 +18,10 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 import pandas_ta as ta
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.utils import to_categorical
 
-# === États de la conversation ===
 ASK_TOKEN = 0
-
-# Configuration initiale
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MODELS_DIR = 'models'
@@ -36,11 +33,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Hyperparamètres
-LOOKBACK = 12
-ATR_PERIOD = 14
-RISK_REWARD_RATIO = 2
+LOOKBACK = 24
 TRAIN_TEST_RATIO = 0.8
+CLASS_THRESHOLD = 0.003
 
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
@@ -57,106 +52,64 @@ def compute_macd(data):
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
+def compute_rsi(data, period=14):
+    return ta.rsi(data, length=period)
+
 def compute_atr(high, low, close):
     return ta.atr(high, low, close, length=14)
 
-def detect_market_conditions(df):
-    """Détecte la volatilité et la tendance"""
-    df['atr'] = compute_atr(df['high'], df['low'], df['close'])
-    volatilite = df['atr'].iloc[-1] / df['close'].iloc[-1]
-    
-    adx_data = ta.adx(df['high'], df['low'], df['close'], length=14)
-    adx = adx_data['ADX_14'].iloc[-1]
-    plus_di = adx_data['DMP_14'].iloc[-1]
-    minus_di = adx_data['DMN_14'].iloc[-1]
-    
-    tendance = "neutre"
-    if adx > 25:
-        tendance = "haussière" if plus_di > minus_di else "baissière"
-    
-    return volatilite, tendance
+def generate_labels(df):
+    df['return'] = np.log(df['close'] / df['close'].shift(1))
+    df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
+    df.dropna(inplace=True)
+    df['label'] = df['label'] + 1  # Convert to 0, 1, 2 (down, neutral, up)
+    return df
 
-def optimize_rsi_period(df):
-    volatilite, tendance = detect_market_conditions(df)
-    if tendance != "neutre" and volatilite < 0.02:
-        return 21
-    elif volatilite > 0.05:
-        return 9
-    else:
-        return 14
+def prepare_data(df, features):
+    scaler = MinMaxScaler()
+    df_scaled = scaler.fit_transform(df[features])
 
-def compute_rsi(data, period):
-    return ta.rsi(data, length=period)
+    X, y = [], []
+    for i in range(LOOKBACK, len(df_scaled)):
+        X.append(df_scaled[i - LOOKBACK:i])
+        y.append(df['label'].values[i])
 
-def optimize_data_period(token: str) -> int:
-    """Détermine la période de données selon la capitalisation"""
-    try:
-        coin_data = cg.get_coin_by_id(token)
-        market_cap = coin_data['market_data']['market_cap']['usd']
-        return 365 if market_cap > 1e10 else 90
-    except:
-        return 90  # Fallback
+    X = np.array(X)
+    y = to_categorical(np.array(y), num_classes=3)
+    return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text(
-        "👋 Bienvenue sur le bot d'analyse crypto !\n"
-        "Quel token veux-tu analyser ?\n"
-        "Exemple : bitcoin, ethereum, solana ..."
-    )
+    await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
     return ASK_TOKEN
 
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     token = update.message.text.strip().lower()
     await analyze_and_reply(update, token)
-    return ConversationHandler.END
+    return ConversationHandler.END  # End the conversation after analysis
 
 async def analyze_and_reply(update: Update, token: str):
-    """Effectue toute l'analyse et répond à l'utilisateur"""
-    days = optimize_data_period(token)
-    await update.message.reply_text(f"🔍 Analyse en cours pour {token} (période auto: {days}j)...")
-    
+    await update.message.reply_text(f"📈 Analyse de {token} en cours...")
+
     try:
-        ohlc = get_crypto_data(token, days)
+        ohlc = get_crypto_data(token, 30)
         if not ohlc:
-            await update.message.reply_text("❌ Cryptomonnaie non trouvée")
+            await update.message.reply_text("❌ Token non trouvé")
             return
 
         df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
 
-        # Indicateurs techniques
         df['macd'], df['signal'] = compute_macd(df['close'])
+        df['rsi'] = compute_rsi(df['close'])
         df['atr'] = compute_atr(df['high'], df['low'], df['close'])
-        rsi_period = optimize_rsi_period(df)
-        df['rsi'] = compute_rsi(df['close'], rsi_period)
-        df.dropna(inplace=True)
+        df = generate_labels(df)
 
-        if len(df) < LOOKBACK * 2:
-            await update.message.reply_text("❌ Données insuffisantes")
-            return
+        features = ['rsi', 'macd', 'atr']
+        X_train, X_test, y_train, y_test = prepare_data(df, features)
 
-        # Préparation des données
-        train_size = int(len(df) * TRAIN_TEST_RATIO)
-        train_df = df.iloc[:train_size]
-        test_df = df.iloc[train_size:]
+        model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
 
-        scaler = MinMaxScaler()
-        train_scaled = scaler.fit_transform(train_df[['close', 'rsi', 'macd', 'atr']])
-        test_scaled = scaler.transform(test_df[['close', 'rsi', 'macd', 'atr']])
-
-        def create_sequences(data):
-            X, y = [], []
-            for i in range(LOOKBACK, len(data)):
-                X.append(data[i-LOOKBACK:i])
-                y.append(data[i, 0])
-            return np.array(X), np.array(y)
-            
-        X_train, y_train = create_sequences(train_scaled)
-        X_test, y_test = create_sequences(test_scaled)
-
-        # Modèle LSTM
-        model_path = os.path.join(MODELS_DIR, f'{token}_model.keras')
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
@@ -166,61 +119,40 @@ async def analyze_and_reply(update: Update, token: str):
                 Dropout(0.3),
                 LSTM(32),
                 Dropout(0.2),
-                Dense(1)
+                Dense(3, activation='softmax')
             ])
-            model.compile(optimizer='adam', loss='mse')
+            model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+            # Entraîne le modèle sans TensorBoard callback
             model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
             model.save(model_path)
 
-        # Prédiction
-        last_sequence = test_scaled[-LOOKBACK:]
-        predicted_price = model.predict(np.array([last_sequence]))[0][0]
-        predicted_price = scaler.inverse_transform([[predicted_price, 0, 0, 0]])[0][0]
+        last_sequence = X_test[-1:]
+        prediction = model.predict(last_sequence, verbose=0)[0]
+        pred_class = np.argmax(prediction)
+        confidence = prediction[pred_class]
+
+        direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
         current_price = df['close'].iloc[-1]
-        current_atr = df['atr'].iloc[-1]
-        
-        direction = "LONG 🟢" if predicted_price > current_price else "SHORT 🔴"
-        tp = current_price + (current_atr * RISK_REWARD_RATIO) if direction.startswith("LONG") else current_price - (current_atr * RISK_REWARD_RATIO)
-        sl = current_price - current_atr if direction.startswith("LONG") else current_price + current_atr
+        atr = df['atr'].iloc[-1]
 
-        # Visualisation
-        fig, axs = plt.subplots(3, 1, figsize=(12, 10))
-        df['close'].plot(ax=axs[0], title='Prix', color='blue')
-        axs[0].axhline(tp, color='green', ls='--', label='TP')
-        axs[0].axhline(sl, color='red', ls='--', label='SL')
-        axs[0].legend()
-        
-        df['rsi'].plot(ax=axs[1], color='purple', title=f'RSI ({rsi_period} périodes)')
-        axs[1].axhline(70, color='red', ls='--', alpha=0.5)
-        axs[1].axhline(30, color='green', ls='--', alpha=0.5)
-        
-        df[['macd', 'signal']].plot(ax=axs[2], color=['orange', 'black'], title='MACD')
-        
-        plt.tight_layout()
-        buf = BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        plt.close()
+        tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
+        sl = current_price - atr if pred_class == 2 else (current_price + atr if pred_class == 0 else current_price)
 
-        # Message final
         message = (
-            f"📊 {token.upper()} - Analyse automatisée\n"
-            f"📅 Période données: {days}j | RSI: {rsi_period}p\n"
-            f"🎯 {direction}\n"
-            f"💰 Prix: {current_price:.2f}$\n"
-            f"📈 TP: {tp:.2f}$ | 📉 SL: {sl:.2f}$\n"
-            f"⚡ ATR: {current_atr:.2f}$"
+            f"📊 {token.upper()} - Signal IA\n"
+            f"🎯 Direction: {direction}\n"
+            f"📈 Confiance: {confidence*100:.2f}%\n"
+            f"💰 Prix actuel: {current_price:.2f}$\n"
+            f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
         )
 
-        await update.message.reply_photo(
-            photo=InputFile(buf, filename='analysis.png'),
-            caption=message
-        )
-        buf.close()
+        # Envoi du message final
+        await update.message.reply_text(message)
 
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
-        await update.message.reply_text("❌ Une erreur est survenue durant l'analyse")
+        await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
