@@ -44,7 +44,7 @@ CLASS_THRESHOLD = 0.003
 
 # Créer une instance du bot
 bot = telegram.Bot(token=TELEGRAM_TOKEN)
-CHAT_ID = "+50yx4Y44y1kzYjhk"  # Remplacer par ton chat_id Telegram
+CHAT_ID = "1677139814"  # Remplacer par ton chat_id Telegram
 
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
