@@ -2,7 +2,6 @@ import logging
 import os
 import numpy as np
 import pandas as pd
-from io import BytesIO
 from functools import lru_cache
 from dotenv import load_dotenv
 from telegram import Update
@@ -21,8 +20,6 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 import pandas_ta as ta
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.callbacks import TensorBoard
-from datetime import datetime
 
 ASK_TOKEN = 0
 load_dotenv()
@@ -112,10 +109,6 @@ async def analyze_and_reply(update: Update, token: str):
         X_train, X_test, y_train, y_test = prepare_data(df, features)
 
         model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
-        
-        # Crée un répertoire pour les logs avec un timestamp
-        log_dir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
-        tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
 
         if os.path.exists(model_path):
             model = load_model(model_path)
@@ -130,8 +123,8 @@ async def analyze_and_reply(update: Update, token: str):
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-            # Entraîne le modèle avec TensorBoard callback
-            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0, callbacks=[tensorboard_callback])
+            # Entraîne le modèle sans TensorBoard callback
+            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
             model.save(model_path)
 
         last_sequence = X_test[-1:]
