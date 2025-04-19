@@ -135,9 +135,6 @@ async def analyze_and_reply(update: Update, token: str):
         current_price = df['close'].iloc[-1]
         atr = df['atr'].iloc[-1]
 
-           try:
-        # ... tout ce qui précède reste pareil ...
-
         tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
         sl = current_price - atr if pred_class == 2 else (current_price + atr if pred_class == 0 else current_price)
 
@@ -154,7 +151,6 @@ async def analyze_and_reply(update: Update, token: str):
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
-
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
