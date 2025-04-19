@@ -8,23 +8,22 @@ from functools import lru_cache
 from dotenv import load_dotenv
 from telegram import Update, InputFile
 from telegram.ext import (
-    Application, 
-    CommandHandler, 
-    MessageHandler, 
-    filters, 
-    ContextTypes, 
-    ConversationHandler,
-    Defaults
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ConversationHandler
 )
 from pycoingecko import CoinGeckoAPI
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+import pandas_ta as ta
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.utils import to_categorical
 
-# === ÉTAT DE CONVERSATION ===
-CHOOSING = 0
-
-# Configuration initiale
+ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MODELS_DIR = 'models'
@@ -33,114 +32,85 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 cg = CoinGeckoAPI()
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler('bot.log'),
-        logging.StreamHandler()
-    ]
+    level=logging.INFO
 )
 
-# Hyperparamètres
-LOOKBACK = 12  # Réduit pour minimiser les besoins en données
-ATR_PERIOD = 14
-RISK_REWARD_RATIO = 2
+LOOKBACK = 24
 TRAIN_TEST_RATIO = 0.8
+CLASS_THRESHOLD = 0.003
 
 @lru_cache(maxsize=100)
-def get_crypto_data(token: str, days: int = 365):  # Récupère 365 jours par défaut
-    """Cache les requêtes API avec mémoization"""
+def get_crypto_data(token: str, days: int):
     try:
         return cg.get_coin_ohlc_by_id(id=token, vs_currency='usd', days=days)
     except Exception as e:
         logging.error(f"API Error for {token}: {str(e)}")
         return None
 
-# Custom functions to replace talib
-def compute_rsi(data, period=14):
-    delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def compute_macd(data, short_period=12, long_period=26, signal_period=9):
-    short_ema = data.ewm(span=short_period, min_periods=1, adjust=False).mean()
-    long_ema = data.ewm(span=long_period, min_periods=1, adjust=False).mean()
+def compute_macd(data):
+    short_ema = data.ewm(span=12, adjust=False).mean()
+    long_ema = data.ewm(span=26, adjust=False).mean()
     macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal_period, min_periods=1, adjust=False).mean()
-    return macd, signal_line
+    signal = macd.ewm(span=9, adjust=False).mean()
+    return macd, signal
 
-def compute_atr(high, low, close, period=14):
-    high_low = high - low
-    high_close = abs(high - close.shift())
-    low_close = abs(low - close.shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1)
-    tr_max = tr.max(axis=1)
-    atr = tr_max.rolling(window=period).mean()
-    return atr
+def compute_rsi(data, period=14):
+    return ta.rsi(data, length=period)
+
+def compute_atr(high, low, close):
+    return ta.atr(high, low, close, length=14)
+
+def generate_labels(df):
+    df['return'] = np.log(df['close'] / df['close'].shift(1))
+    df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
+    df.dropna(inplace=True)
+    df['label'] = df['label'] + 1  # Convert to 0, 1, 2 (down, neutral, up)
+    return df
+
+def prepare_data(df, features):
+    scaler = MinMaxScaler()
+    df_scaled = scaler.fit_transform(df[features])
+
+    X, y = [], []
+    for i in range(LOOKBACK, len(df_scaled)):
+        X.append(df_scaled[i - LOOKBACK:i])
+        y.append(df['label'].values[i])
+
+    X = np.array(X)
+    y = to_categorical(np.array(y), num_classes=3)
+    return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text(
-        "🚀 Crypto Trading Bot Pro\n"
-        "Entrez le symbole d'une cryptomonnaie (ex: bitcoin):"
-    )
-    return CHOOSING
+    await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
+    return ASK_TOKEN
 
-async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_input = update.message.text.lower()
-    await update.message.reply_chat_action(action='typing')
+async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    token = update.message.text.strip().lower()
+    await analyze_and_reply(update, token)
+    return ConversationHandler.END
+
+async def analyze_and_reply(update: Update, token: str):
+    await update.message.reply_text(f"📈 Analyse de {token} en cours...")
 
     try:
-        # Récupération des données (365 jours)
-        ohlc = get_crypto_data(user_input, days=365)
+        ohlc = get_crypto_data(token, 30)
         if not ohlc:
-            await update.message.reply_text("❌ Cryptomonnaie non trouvée ou erreur API.")
-            return ConversationHandler.END
+            await update.message.reply_text("❌ Token non trouvé")
+            return
 
         df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
 
-        # Calcul des indicateurs (RSI, MACD, ATR)
-        df['rsi'] = compute_rsi(df['close'], 14)
         df['macd'], df['signal'] = compute_macd(df['close'])
-        df['atr'] = compute_atr(df['high'], df['low'], df['close'], ATR_PERIOD)
-        df.dropna(inplace=True)
+        df['rsi'] = compute_rsi(df['close'])
+        df['atr'] = compute_atr(df['high'], df['low'], df['close'])
+        df = generate_labels(df)
 
-        # Vérification après traitement des indicateurs
-        if len(df) < LOOKBACK * 2:
-            await update.message.reply_text("❌ Données insuffisantes après traitement. Essayez avec une période plus longue (ex: 1 an).")
-            return ConversationHandler.END
+        features = ['rsi', 'macd', 'atr']
+        X_train, X_test, y_train, y_test = prepare_data(df, features)
 
-        # Séparation train/test
-        train_size = int(len(df) * TRAIN_TEST_RATIO)
-        train_df = df.iloc[:train_size]
-        test_df = df.iloc[train_size:]
-
-        # Normalisation
-        scaler = MinMaxScaler()
-        train_scaled = scaler.fit_transform(train_df[['close', 'rsi', 'macd', 'atr']])
-        test_scaled = scaler.transform(test_df[['close', 'rsi', 'macd', 'atr']])
-
-        # Préparation des séquences
-        def create_sequences(data):
-            X, y = [], []
-            for i in range(LOOKBACK, len(data)):
-                X.append(data[i-LOOKBACK:i])
-                y.append(data[i, 0])
-            return np.array(X), np.array(y)
-            
-        X_train, y_train = create_sequences(train_scaled)
-        X_test, y_test = create_sequences(test_scaled)
-
-        # Vérification finale des séquences
-        if X_train.size == 0 or X_test.size == 0:
-            await update.message.reply_text("❌ Données insuffisantes après création des séquences. Réduisez le LOOKBACK ou augmentez la période.")
-            return ConversationHandler.END
-
-        # Chargement/Entraînement du modèle
-        model_path = os.path.join(MODELS_DIR, f'{user_input}_model.keras')
+        model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
@@ -150,101 +120,48 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 Dropout(0.3),
                 LSTM(32),
                 Dropout(0.2),
-                Dense(1)
+                Dense(3, activation='softmax')
             ])
-            model.compile(optimizer='adam', loss='mse')
-            model.fit(
-                X_train, y_train,
-                epochs=20,
-                batch_size=32,
-                validation_split=0.1,
-                verbose=0
-            )
+            model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
             model.save(model_path)
 
-        # Backtesting
-        test_predictions = model.predict(X_test)
-        test_accuracy = np.mean(np.sign(test_predictions.flatten()) == np.sign(y_test)) * 100
+        last_sequence = X_test[-1:]
+        prediction = model.predict(last_sequence, verbose=0)[0]
+        pred_class = np.argmax(prediction)
+        confidence = prediction[pred_class]
 
-        # Prédiction actuelle
-        last_sequence = test_scaled[-LOOKBACK:]
-        predicted_price = model.predict(np.array([last_sequence]))[0][0]
-        predicted_price = scaler.inverse_transform([[predicted_price, 0, 0, 0]])[0][0]
-
-        # Calcul TP/SL
+        direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
         current_price = df['close'].iloc[-1]
-        current_atr = df['atr'].iloc[-1]
-        
-        if predicted_price > current_price:
-            direction = "LONG 🟢"
-            tp = current_price + (current_atr * RISK_REWARD_RATIO)
-            sl = current_price - current_atr
-        else:
-            direction = "SHORT 🔴"
-            tp = current_price - (current_atr * RISK_REWARD_RATIO)
-            sl = current_price + current_atr
+        atr = df['atr'].iloc[-1]
 
-        # Visualisation
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-        df['close'].plot(ax=ax1, title='Prix', color='blue')
-        ax1.axhline(tp, color='green', ls='--', label='TP')
-        ax1.axhline(sl, color='red', ls='--', label='SL')
-        ax1.legend()
-        
-        df['atr'].plot(ax=ax2, title='Volatilité (ATR)', color='orange')
-        
-        buf = BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
-        buf.seek(0)
-        plt.close(fig)
+        tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
+        sl = current_price - atr if pred_class == 2 else (current_price + atr if pred_class == 0 else current_price)
 
-        # Message final
         message = (
-            f"📊 {user_input.upper()} - Analyse Professionnelle\n\n"
+            f"📊 {token.upper()} - Signal IA
+"
             f"🎯 Direction: {direction}\n"
+            f"📈 Confiance: {confidence*100:.2f}%\n"
             f"💰 Prix actuel: {current_price:.2f}$\n"
-            f"📈 TP: {tp:.2f}$ (+{(tp/current_price-1)*100:.1f}%)\n"
-            f"📉 SL: {sl:.2f}$ ({(sl/current_price-1)*100:.1f}%)\n"
-            f"📊 Précision backtest: {test_accuracy:.1f}%\n"
-            f"⚡ Volatilité (ATR): {current_atr:.2f}$"
+            f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
         )
 
-        await update.message.reply_photo(
-            photo=InputFile(buf, filename='analysis.png'),
-            caption=message
-        )
-        buf.close()
+        await update.message.reply_text(message)
 
     except Exception as e:
-        logging.exception("Erreur critique:")
-        await update.message.reply_text(f"❌ Erreur: {str(e)[:200]}")
-
-    return ConversationHandler.END
+        logging.error(f"Erreur: {str(e)}")
+        await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
 def main() -> None:
-    # Vérification du token
-    if not TELEGRAM_TOKEN:
-        raise ValueError("Token Telegram non trouvé. Vérifie le fichier .env.")
-
-    # Configuration des valeurs par défaut pour les messages
-    defaults = Defaults(
-        parse_mode="HTML",
-        disable_notification=False
-    )
-    
-    application = Application.builder() \
-        .token(TELEGRAM_TOKEN) \
-        .defaults(defaults) \
-        .build()
-
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
-        states={ 
-            CHOOSING: [MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_token)]
+        states={
+            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
         fallbacks=[]
     )
-
     application.add_handler(conv_handler)
     application.run_polling()
 
