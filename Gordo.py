@@ -24,12 +24,10 @@ from tensorflow.keras.utils import to_categorical
 from datetime import datetime
 import json
 
-# Constants
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MODELS_DIR = 'models'
-HISTORY_FILE = 'analysis_history.json'
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 cg = CoinGeckoAPI()
@@ -41,8 +39,20 @@ logging.basicConfig(
 LOOKBACK = 24
 TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
+HISTORY_FILE = 'analysis_history.json'
 
-# Load or create history file
+# Fonction pour convertir les valeurs float32 en float
+def convert_to_float(value):
+    if isinstance(value, np.float32):
+        return float(value)
+    elif isinstance(value, dict):
+        return {k: convert_to_float(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [convert_to_float(v) for v in value]
+    else:
+        return value
+
+# Charger l'historique des analyses
 def load_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, 'r') as f:
@@ -50,11 +60,15 @@ def load_history():
     else:
         return []
 
+# Sauvegarder l'historique des analyses
 def save_history(history):
+    # Convertir toutes les valeurs float32 en float
+    history = convert_to_float(history)
+    
+    # Enregistrement dans le fichier JSON
     with open(HISTORY_FILE, 'w') as f:
         json.dump(history, f, indent=4)
 
-# Caching crypto data
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
     try:
@@ -63,7 +77,6 @@ def get_crypto_data(token: str, days: int):
         logging.error(f"API Error for {token}: {str(e)}")
         return None
 
-# Technical indicators
 def compute_macd(data):
     short_ema = data.ewm(span=12, adjust=False).mean()
     long_ema = data.ewm(span=26, adjust=False).mean()
@@ -77,7 +90,6 @@ def compute_rsi(data, period=14):
 def compute_atr(high, low, close):
     return ta.atr(high, low, close, length=14)
 
-# Label generation
 def generate_labels(df):
     df['return'] = np.log(df['close'] / df['close'].shift(1))
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
@@ -85,7 +97,6 @@ def generate_labels(df):
     df['label'] = df['label'] + 1  # Convert to 0, 1, 2 (down, neutral, up)
     return df
 
-# Prepare data with MinMax scaling and labels
 def prepare_data(df, features):
     scaler = MinMaxScaler()
     df_scaled = scaler.fit_transform(df[features])
@@ -99,30 +110,15 @@ def prepare_data(df, features):
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
-# Validate token input
-def is_valid_token(token: str) -> bool:
-    try:
-        cg.get_coin_by_id(id=token)
-        return True
-    except:
-        return False
-
-# Telegram bot commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
     return ASK_TOKEN
 
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     token = update.message.text.strip().lower()
-    
-    if not is_valid_token(token):
-        await update.message.reply_text(f"❌ Token {token} non trouvé. Essaie un autre token.")
-        return ASK_TOKEN  # Retry
-
     await analyze_and_reply(update, token)
     return ConversationHandler.END  # End the conversation after analysis
 
-# Perform analysis and send result
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
 
@@ -136,17 +132,14 @@ async def analyze_and_reply(update: Update, token: str):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
 
-        # Compute indicators
         df['macd'], df['signal'] = compute_macd(df['close'])
         df['rsi'] = compute_rsi(df['close'])
         df['atr'] = compute_atr(df['high'], df['low'], df['close'])
         df = generate_labels(df)
 
-        # Feature selection
         features = ['rsi', 'macd', 'atr']
         X_train, X_test, y_train, y_test = prepare_data(df, features)
 
-        # Model path
         model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
 
         if os.path.exists(model_path):
@@ -161,18 +154,14 @@ async def analyze_and_reply(update: Update, token: str):
                 Dense(3, activation='softmax')
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-            # Train the model
             model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
             model.save(model_path)
 
-        # Evaluate the model
         last_sequence = X_test[-1:]
         prediction = model.predict(last_sequence, verbose=0)[0]
         pred_class = np.argmax(prediction)
         confidence = prediction[pred_class]
 
-        # Signal calculation
         direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
         current_price = df['close'].iloc[-1]
         atr = df['atr'].iloc[-1]
@@ -180,7 +169,15 @@ async def analyze_and_reply(update: Update, token: str):
         tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
         sl = current_price - atr if pred_class == 2 else (current_price + atr if pred_class == 0 else current_price)
 
-        # Record the analysis result
+        message = (
+            f"📊 {token.upper()} - Signal IA\n"
+            f"🎯 Direction: {direction}\n"
+            f"📈 Confiance: {confidence*100:.2f}%\n"
+            f"💰 Prix actuel: {current_price:.2f}$\n"
+            f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
+        )
+
+        # Enregistrer les résultats dans l'historique
         history = load_history()
         result = {
             'token': token,
@@ -195,47 +192,36 @@ async def analyze_and_reply(update: Update, token: str):
         history.append(result)
         save_history(history)
 
-        message = (
-            f"📊 {token.upper()} - Signal IA\n"
-            f"🎯 Direction: {direction}\n"
-            f"📈 Confiance: {confidence*100:.2f}%\n"
-            f"💰 Prix actuel: {current_price:.2f}$\n"
-            f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
-        )
-
-        # Send final message
         await update.message.reply_text(message)
 
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
-# Command to retrieve the analysis history
-async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Commande pour afficher l'historique des analyses
+async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
-    if not history:
-        await update.message.reply_text("❌ Aucun historique d'analyse trouvé.")
-        return
-
-    history_message = "📊 Récapitulatif des analyses précédentes :\n\n"
-    for entry in history[-5:]:  # Show the last 5 analyses
-        history_message += f"Token: {entry['token']} | Date: {entry['timestamp']}\n"
-        history_message += f"Direction: {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
-        history_message += f"Prix actuel: {entry['current_price']:.2f}$ | TP: {entry['tp']:.2f}$ | SL: {entry['sl']:.2f}$\n\n"
-
-    await update.message.reply_text(history_message)
+    if history:
+        messages = [f"Analyse pour {entry['token']} à {entry['timestamp']}\n"
+                    f"Direction: {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
+                    f"Prix actuel: {entry['current_price']}$ | TP: {entry['tp']}$ | SL: {entry['sl']}$\n"
+                    for entry in history]
+        await update.message.reply_text("\n\n".join(messages))
+    else:
+        await update.message.reply_text("Aucune analyse historique disponible.")
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler('history', show_history)]  # Commande pour afficher l'historique
     )
+
     application.add_handler(conv_handler)
-    application.add_handler(CommandHandler('historique', get_history))  # New command for history
     application.run_polling()
 
 if __name__ == '__main__':
