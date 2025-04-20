@@ -42,7 +42,7 @@ CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
 def convert_to_float(value):
-    if isinstance(value, (np.float32, np.float64, np.int64)):
+    if isinstance(value, (np.float32, np.float64, np.int64, np.int32)):
         return float(value)
     elif isinstance(value, dict):
         return {k: convert_to_float(v) for k, v in value.items()}
@@ -79,7 +79,7 @@ def save_history(history):
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
     try:
-        return cg.get_coin_ohlc_by_id(id=token, vs_currency='usd', days=days)
+        return cg.get_coin_market_chart_by_id(id=token, vs_currency='usd', days=days)['prices']
     except Exception as e:
         logging.error(f"API Error for {token}: {str(e)}")
         return None
@@ -138,14 +138,19 @@ async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
 
     try:
-        ohlc = get_crypto_data(token, 30)
-        if not ohlc:
+        raw_prices = get_crypto_data(token, 30)
+        if not raw_prices:
             await update.message.reply_text("❌ Token non trouvé")
             return
 
-        df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
+        df = pd.DataFrame(raw_prices, columns=['timestamp', 'close'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
+
+        # Estimer les colonnes OHLC à partir de close (fallback simplifié)
+        df['open'] = df['close']
+        df['high'] = df['close'] * 1.01
+        df['low'] = df['close'] * 0.99
 
         df['macd'], df['signal'] = compute_macd(df['close'])
         df['rsi'] = compute_rsi(df['close'])
