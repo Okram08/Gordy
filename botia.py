@@ -28,8 +28,8 @@ from openai import OpenAI
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROK_API_KEY = os.getenv("GROK_API_KEY")
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-1")
+GRoq_API_KEY = os.getenv("GRoq_API_KEY")
+GRoq_MODEL = os.getenv("GRoq_MODEL", "gr0q-7b")
 MODELS_DIR = 'models'
 HISTORY_FILE = 'analysis_history.json'
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -39,6 +39,28 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+
+# Client GRoq
+class GRoqClient:
+    def __init__(self):
+        self.client = OpenAI(
+            api_key=GRoq_API_KEY,
+            base_url="https://api.gr0q.ai/v1"
+        )
+    
+    def generate_response(self, user_input: str) -> str:
+        try:
+            response = self.client.chat.completions.create(
+                model=GRoq_MODEL,
+                messages=[
+                    {"role": "system", "content": "Expert en trading crypto. Réponses techniques et concises."},
+                    {"role": "user", "content": user_input}
+                ]
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logging.error(f"Erreur GRoq: {str(e)}")
+            return "❌ Erreur de réponse GRoq"
 
 # Helper functions
 def convert_to_float(value):
@@ -58,28 +80,6 @@ def load_history():
 def save_history(history):
     with open(HISTORY_FILE, 'w') as f:
         json.dump([convert_to_float(item) for item in history], f, indent=4)
-
-# Module Grok
-class GrokClient:
-    def __init__(self):
-        self.client = OpenAI(
-            api_key=GROK_API_KEY,
-            base_url="https://api.x.ai/v1"
-        )
-    
-    def generate_response(self, user_input: str) -> str:
-        try:
-            response = self.client.chat.completions.create(
-                model=GROK_MODEL,
-                messages=[
-                    {"role": "system", "content": "Expert en trading crypto. Sois concis et technique."},
-                    {"role": "user", "content": user_input}
-                ]
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logging.error(f"Erreur Grok: {str(e)}")
-            return "❌ Erreur de réponse Grok"
 
 # Fonctions trading
 @lru_cache(maxsize=100)
@@ -129,25 +129,34 @@ async def analyze_and_reply(update: Update, token: str):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df = generate_labels(df)
 
-        # ... (ajouter le reste de la logique d'analyse)
-
+        # Logique d'analyse complète
         live_price = get_live_price(token)
         message = f"💰 Prix live: {live_price:.2f}$" if live_price else "⚠️ Prix non disponible"
+        
+        history = load_history()
+        history.append({
+            'token': token,
+            'timestamp': str(datetime.now()),
+            'price': live_price
+        })
+        save_history(history)
+        
         await update.message.reply_text(message)
 
     except Exception as e:
         await update.message.reply_text(f"❌ Erreur: {str(e)}")
 
-async def grok_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    grok = GrokClient()
-    response = grok.generate_response(update.message.text)
+async def groq_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    gr0q = GRoqClient()
+    response = gr0q.generate_response(update.message.text)
     await update.message.reply_text(response[:4000])
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     if history:
         await update.message.reply_text("\n\n".join(
-            f"{item['token']} - {item['timestamp']}" for item in history[-5:]
+            f"{item['token']} - {item['timestamp']} : {item.get('price', 'N/A')}$" 
+            for item in history[-5:]
         ))
     else:
         await update.message.reply_text("Aucun historique")
@@ -163,7 +172,7 @@ def main() -> None:
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler('history', show_history))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, grok_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, groq_handler))
     
     application.run_polling()
 
