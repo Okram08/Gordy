@@ -42,10 +42,8 @@ CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
 def convert_to_float(value):
-    if isinstance(value, (np.float32, np.float64)):
+    if isinstance(value, (np.float32, np.float64, np.int64)):
         return float(value)
-    elif isinstance(value, (np.int32, np.int64)):
-        return int(value)
     elif isinstance(value, dict):
         return {k: convert_to_float(v) for k, v in value.items()}
     elif isinstance(value, list):
@@ -179,10 +177,13 @@ async def analyze_and_reply(update: Update, token: str):
         pred_class = np.argmax(prediction)
         confidence = prediction[pred_class]
 
-        direction = "⬆️ LONG" if pred_class == 2 else ("🔽️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
+        direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
 
-        live_price = get_live_price(token)
-        current_price = live_price if live_price is not None else df['close'].iloc[-1]
+        current_price = get_live_price(token)
+        if current_price is None:
+            await update.message.reply_text("❌ Impossible de récupérer le prix en direct. Réessaie plus tard.")
+            return
+
         atr = df['atr'].iloc[-1]
 
         tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
@@ -193,7 +194,7 @@ async def analyze_and_reply(update: Update, token: str):
             f"🎯 Direction: {direction}\n"
             f"📈 Confiance: {confidence*100:.2f}%\n"
             f"💰 Prix live: {current_price:.2f}$\n"
-            f"🎯 TP: {tp:.2f}$ | 🚩 SL: {sl:.2f}$\n"
+            f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
         )
 
         history = load_history()
