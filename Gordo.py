@@ -116,18 +116,23 @@ def compute_atr(high, low, close):
 
 
 def generate_labels(df):
+    # Calcul du retour sur investissement (return)
     df['return'] = np.log(df['close'] / df['close'].shift(1))
+
+    # Création des labels
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
-    df.dropna(inplace=True)
-    df['label'] = df['label'] + 1
+    df.dropna(inplace=True)  # Suppression des lignes NaN qui apparaissent suite aux calculs
+    df['label'] = df['label'] + 1  # Transformation des labels en valeurs {0, 1, 2}
+
+    # Vérification de la génération de la colonne 'label'
+    logging.info(f"Labels générés : {df[['close', 'label']].tail()}")
+
     return df
 
 
 def prepare_data(df, features):
-    # Handling missing data before scaling
-    df = df[features].dropna()
     scaler = MinMaxScaler()
-    df_scaled = scaler.fit_transform(df)
+    df_scaled = scaler.fit_transform(df[features])
 
     X, y = [], []
     for i in range(LOOKBACK, len(df_scaled)):
@@ -173,11 +178,10 @@ async def analyze_and_reply(update: Update, token: str):
 
         model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
 
-        # Load or train model if it does not exist
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
-            model = Sequential([
+            model = Sequential([ 
                 Input(shape=(X_train.shape[1], X_train.shape[2])),
                 LSTM(64, return_sequences=True),
                 Dropout(0.3),
@@ -259,7 +263,7 @@ def main() -> None:
         states={
             ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
-        fallbacks=[CommandHandler('history', show_history)]  # Ajout également ici
+        fallbacks=[CommandHandler('history', show_history)]
     )
 
     application.add_handler(conv_handler)
