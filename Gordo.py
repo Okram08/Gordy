@@ -1,5 +1,3 @@
-# Version améliorée du bot Telegram avec prédiction de signaux de trading et winrate plus élevé
-
 import logging
 import os
 import numpy as np
@@ -22,7 +20,6 @@ from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 import pandas_ta as ta
 from sklearn.model_selection import train_test_split
-from sklearn.utils import class_weight
 from tensorflow.keras.utils import to_categorical
 from datetime import datetime
 import json
@@ -45,8 +42,10 @@ CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
 def convert_to_float(value):
-    if isinstance(value, np.float32):
+    if isinstance(value, (np.float32, np.float64)):
         return float(value)
+    elif isinstance(value, (np.int32, np.int64)):
+        return int(value)
     elif isinstance(value, dict):
         return {k: convert_to_float(v) for k, v in value.items()}
     elif isinstance(value, list):
@@ -109,8 +108,7 @@ def compute_atr(high, low, close):
     return ta.atr(high, low, close, length=14)
 
 def generate_labels(df):
-    df['future_close'] = df['close'].shift(-24)
-    df['return'] = (df['future_close'] - df['close']) / df['close']
+    df['return'] = np.log(df['close'] / df['close'].shift(1))
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
     df.dropna(inplace=True)
     df['label'] = df['label'] + 1
@@ -127,7 +125,7 @@ def prepare_data(df, features):
 
     X = np.array(X)
     y = to_categorical(np.array(y), num_classes=3)
-    return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False), scaler
+    return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
@@ -154,13 +152,10 @@ async def analyze_and_reply(update: Update, token: str):
         df['macd'], df['signal'] = compute_macd(df['close'])
         df['rsi'] = compute_rsi(df['close'])
         df['atr'] = compute_atr(df['high'], df['low'], df['close'])
-        df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
-        df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
-
         df = generate_labels(df)
 
-        features = ['rsi', 'macd', 'atr', 'ema20', 'ema50']
-        (X_train, X_test, y_train, y_test), scaler = prepare_data(df, features)
+        features = ['rsi', 'macd', 'atr']
+        X_train, X_test, y_train, y_test = prepare_data(df, features)
 
         model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
 
@@ -176,12 +171,7 @@ async def analyze_and_reply(update: Update, token: str):
                 Dense(3, activation='softmax')
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-            y_labels = np.argmax(y_train, axis=1)
-            weights = class_weight.compute_class_weight('balanced', classes=np.unique(y_labels), y=y_labels)
-            class_weights = dict(enumerate(weights))
-
-            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0, class_weight=class_weights)
+            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
             model.save(model_path)
 
         last_sequence = X_test[-1:]
@@ -189,7 +179,7 @@ async def analyze_and_reply(update: Update, token: str):
         pred_class = np.argmax(prediction)
         confidence = prediction[pred_class]
 
-        direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
+        direction = "⬆️ LONG" if pred_class == 2 else ("🔽️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
 
         live_price = get_live_price(token)
         current_price = live_price if live_price is not None else df['close'].iloc[-1]
@@ -203,7 +193,7 @@ async def analyze_and_reply(update: Update, token: str):
             f"🎯 Direction: {direction}\n"
             f"📈 Confiance: {confidence*100:.2f}%\n"
             f"💰 Prix live: {current_price:.2f}$\n"
-            f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
+            f"🎯 TP: {tp:.2f}$ | 🚩 SL: {sl:.2f}$\n"
         )
 
         history = load_history()
