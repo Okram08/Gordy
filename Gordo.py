@@ -124,8 +124,10 @@ def generate_labels(df):
 
 
 def prepare_data(df, features):
+    # Handling missing data before scaling
+    df = df[features].dropna()
     scaler = MinMaxScaler()
-    df_scaled = scaler.fit_transform(df[features])
+    df_scaled = scaler.fit_transform(df)
 
     X, y = [], []
     for i in range(LOOKBACK, len(df_scaled)):
@@ -171,6 +173,7 @@ async def analyze_and_reply(update: Update, token: str):
 
         model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
 
+        # Load or train model if it does not exist
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
