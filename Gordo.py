@@ -2,7 +2,6 @@ import logging
 import os
 import numpy as np
 import pandas as pd
-from io import BytesIO
 from functools import lru_cache
 from dotenv import load_dotenv
 from telegram import Update
@@ -81,60 +80,30 @@ def save_history(history):
         logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
 
 
-@lru_cache(maxsize=100)
-def get_crypto_data(token: str, days: int):
-    try:
-        return cg.get_coin_ohlc_by_id(id=token, vs_currency='usd', days=days)
-    except Exception as e:
-        logging.error(f"API Error for {token}: {str(e)}")
-        return None
+async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Charger l'historique
+    history = load_history()
 
+    # Vérifier si l'historique est vide
+    if not history:
+        await update.message.reply_text("Aucune analyse historique disponible.")
+        logging.info("Aucune analyse historique trouvée.")
+        return
 
-def get_live_price(token: str):
-    try:
-        data = cg.get_price(ids=token, vs_currencies='usd')
-        return data[token]['usd'] if token in data else None
-    except Exception as e:
-        logging.error(f"Erreur API prix live pour {token}: {str(e)}")
-        return None
+    # Construire le message
+    messages = []
+    for entry in history:
+        # Vérification des clés attendues
+        if 'token' in entry and 'timestamp' in entry and 'direction' in entry and 'confidence' in entry:
+            messages.append(f"Analyse pour {entry['token']} à {entry['timestamp']}\n"
+                            f"Direction: {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
+                            f"Prix actuel: {entry.get('current_price', 'N/A')}$ | TP: {entry.get('tp', 'N/A')}$ | SL: {entry.get('sl', 'N/A')}$\n")
+        else:
+            logging.warning(f"Entrée manquante de certaines clés dans l'historique : {entry}")
 
-
-def compute_macd(data):
-    short_ema = data.ewm(span=12, adjust=False).mean()
-    long_ema = data.ewm(span=26, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal = macd.ewm(span=9, adjust=False).mean()
-    return macd, signal
-
-
-def compute_rsi(data, period=14):
-    return ta.rsi(data, length=period)
-
-
-def compute_atr(high, low, close):
-    return ta.atr(high, low, close, length=14)
-
-
-def generate_labels(df):
-    df['return'] = np.log(df['close'] / df['close'].shift(1))
-    df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
-    df.dropna(inplace=True)
-    df['label'] = df['label'] + 1
-    return df
-
-
-def prepare_data(df, features):
-    scaler = MinMaxScaler()
-    df_scaled = scaler.fit_transform(df[features])
-
-    X, y = [], []
-    for i in range(LOOKBACK, len(df_scaled)):
-        X.append(df_scaled[i - LOOKBACK:i])
-        y.append(df['label'].values[i])
-
-    X = np.array(X)
-    y = to_categorical(np.array(y), num_classes=3)
-    return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
+    # Envoyer le message
+    await update.message.reply_text("\n\n".join(messages))
+    logging.info(f"{len(messages)} analyses historiques affichées.")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -232,39 +201,23 @@ async def analyze_and_reply(update: Update, token: str):
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
 
-async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    history = load_history()
-    if history:
-        messages = []
-        for entry in history:
-            # Vérification des clés attendues
-            if 'token' in entry and 'timestamp' in entry and 'direction' in entry and 'confidence' in entry:
-                messages.append(f"Analyse pour {entry['token']} à {entry['timestamp']}\n"
-                                f"Direction: {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
-                                f"Prix actuel: {entry.get('current_price', 'N/A')}$ | TP: {entry.get('tp', 'N/A')}$ | SL: {entry.get('sl', 'N/A')}$\n")
-            else:
-                logging.warning(f"Entrée d'historique incomplète: {entry}")
-                
-        if messages:
-            await update.message.reply_text("\n\n".join(messages))
-        else:
-            await update.message.reply_text("Aucune analyse historique disponible.")
-    else:
-        await update.message.reply_text("Aucun historique trouvé.")
-
-
-def main():
+def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    # Ajout d'un gestionnaire pour la commande /history
+    application.add_handler(CommandHandler("history", show_history))
+
+    # Ajout du ConversationHandler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
-        fallbacks=[CommandHandler('history', show_history)]
+        fallbacks=[CommandHandler('history', show_history)]  # Ajout également ici
     )
 
     application.add_handler(conv_handler)
+
     application.run_polling()
 
 
