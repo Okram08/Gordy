@@ -24,6 +24,7 @@ from tensorflow.keras.utils import to_categorical
 from datetime import datetime
 import json
 
+# Constants
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -41,8 +42,9 @@ TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
+
 def convert_to_float(value):
-    if isinstance(value, (np.float32, np.float64, np.int64, np.int32)):
+    if isinstance(value, (np.float32, np.float64, np.int64)):
         return float(value)
     elif isinstance(value, dict):
         return {k: convert_to_float(v) for k, v in value.items()}
@@ -50,6 +52,7 @@ def convert_to_float(value):
         return [convert_to_float(v) for v in value]
     else:
         return value
+
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -67,6 +70,7 @@ def load_history():
         logging.info(f"Aucun fichier historique trouvé, création de {HISTORY_FILE}.")
         return []
 
+
 def save_history(history):
     history = convert_to_float(history)
     try:
@@ -76,13 +80,15 @@ def save_history(history):
     except Exception as e:
         logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
 
+
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
     try:
-        return cg.get_coin_market_chart_by_id(id=token, vs_currency='usd', days=days)['prices']
+        return cg.get_coin_ohlc_by_id(id=token, vs_currency='usd', days=days)
     except Exception as e:
         logging.error(f"API Error for {token}: {str(e)}")
         return None
+
 
 def get_live_price(token: str):
     try:
@@ -92,6 +98,7 @@ def get_live_price(token: str):
         logging.error(f"Erreur API prix live pour {token}: {str(e)}")
         return None
 
+
 def compute_macd(data):
     short_ema = data.ewm(span=12, adjust=False).mean()
     long_ema = data.ewm(span=26, adjust=False).mean()
@@ -99,11 +106,14 @@ def compute_macd(data):
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
+
 def compute_rsi(data, period=14):
     return ta.rsi(data, length=period)
 
+
 def compute_atr(high, low, close):
     return ta.atr(high, low, close, length=14)
+
 
 def generate_labels(df):
     df['return'] = np.log(df['close'] / df['close'].shift(1))
@@ -111,6 +121,7 @@ def generate_labels(df):
     df.dropna(inplace=True)
     df['label'] = df['label'] + 1
     return df
+
 
 def prepare_data(df, features):
     scaler = MinMaxScaler()
@@ -125,32 +136,30 @@ def prepare_data(df, features):
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
     return ASK_TOKEN
+
 
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     token = update.message.text.strip().lower()
     await analyze_and_reply(update, token)
     return ConversationHandler.END
 
+
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
 
     try:
-        raw_prices = get_crypto_data(token, 30)
-        if not raw_prices:
+        ohlc = get_crypto_data(token, 30)
+        if not ohlc:
             await update.message.reply_text("❌ Token non trouvé")
             return
 
-        df = pd.DataFrame(raw_prices, columns=['timestamp', 'close'])
+        df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
-
-        # Estimer les colonnes OHLC à partir de close (fallback simplifié)
-        df['open'] = df['close']
-        df['high'] = df['close'] * 1.01
-        df['low'] = df['close'] * 0.99
 
         df['macd'], df['signal'] = compute_macd(df['close'])
         df['rsi'] = compute_rsi(df['close'])
@@ -222,6 +231,7 @@ async def analyze_and_reply(update: Update, token: str):
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
+
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     if history:
@@ -233,19 +243,26 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Aucune analyse historique disponible.")
 
+
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    # Ajout d'un gestionnaire pour la commande /history
+    application.add_handler(CommandHandler("history", show_history))
+
+    # Ajout du ConversationHandler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
-        fallbacks=[CommandHandler('history', show_history)]
+        fallbacks=[CommandHandler('history', show_history)]  # Ajout également ici
     )
 
     application.add_handler(conv_handler)
+
     application.run_polling()
+
 
 if __name__ == '__main__':
     main()
