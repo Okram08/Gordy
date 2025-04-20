@@ -116,17 +116,10 @@ def compute_atr(high, low, close):
 
 
 def generate_labels(df):
-    # Calcul du retour sur investissement (return)
     df['return'] = np.log(df['close'] / df['close'].shift(1))
-
-    # Création des labels
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
-    df.dropna(inplace=True)  # Suppression des lignes NaN qui apparaissent suite aux calculs
-    df['label'] = df['label'] + 1  # Transformation des labels en valeurs {0, 1, 2}
-
-    # Vérification de la génération de la colonne 'label'
-    logging.info(f"Labels générés : {df[['close', 'label']].tail()}")
-
+    df.dropna(inplace=True)
+    df['label'] = df['label'] + 1
     return df
 
 
@@ -181,7 +174,7 @@ async def analyze_and_reply(update: Update, token: str):
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
-            model = Sequential([ 
+            model = Sequential([
                 Input(shape=(X_train.shape[1], X_train.shape[2])),
                 LSTM(64, return_sequences=True),
                 Dropout(0.3),
@@ -263,7 +256,7 @@ def main() -> None:
         states={
             ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
-        fallbacks=[CommandHandler('history', show_history)]
+        fallbacks=[CommandHandler('history', show_history)]  # Ajout également ici
     )
 
     application.add_handler(conv_handler)
