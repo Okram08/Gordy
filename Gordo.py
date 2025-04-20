@@ -41,7 +41,6 @@ TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
-# Fonction pour convertir les valeurs float32 en float
 def convert_to_float(value):
     if isinstance(value, np.float32):
         return float(value)
@@ -52,7 +51,6 @@ def convert_to_float(value):
     else:
         return value
 
-# Charger l'historique des analyses
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -62,7 +60,6 @@ def load_history():
                 return history
         except json.JSONDecodeError:
             logging.error(f"Erreur de formatage dans le fichier {HISTORY_FILE}, réinitialisation.")
-            # Si erreur JSON, vider le fichier pour éviter une boucle infinie
             with open(HISTORY_FILE, 'w') as f:
                 json.dump([], f)
             return []
@@ -70,12 +67,8 @@ def load_history():
         logging.info(f"Aucun fichier historique trouvé, création de {HISTORY_FILE}.")
         return []
 
-# Sauvegarder l'historique des analyses
 def save_history(history):
-    # Convertir toutes les valeurs float32 en float
     history = convert_to_float(history)
-    
-    # Enregistrement dans le fichier JSON
     try:
         with open(HISTORY_FILE, 'w') as f:
             json.dump(history, f, indent=4)
@@ -89,6 +82,14 @@ def get_crypto_data(token: str, days: int):
         return cg.get_coin_ohlc_by_id(id=token, vs_currency='usd', days=days)
     except Exception as e:
         logging.error(f"API Error for {token}: {str(e)}")
+        return None
+
+def get_live_price(token: str):
+    try:
+        data = cg.get_price(ids=token, vs_currencies='usd')
+        return data[token]['usd'] if token in data else None
+    except Exception as e:
+        logging.error(f"Erreur API prix live pour {token}: {str(e)}")
         return None
 
 def compute_macd(data):
@@ -108,7 +109,7 @@ def generate_labels(df):
     df['return'] = np.log(df['close'] / df['close'].shift(1))
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
     df.dropna(inplace=True)
-    df['label'] = df['label'] + 1  # Convert to 0, 1, 2 (down, neutral, up)
+    df['label'] = df['label'] + 1
     return df
 
 def prepare_data(df, features):
@@ -131,7 +132,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     token = update.message.text.strip().lower()
     await analyze_and_reply(update, token)
-    return ConversationHandler.END  # End the conversation after analysis
+    return ConversationHandler.END
 
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
@@ -177,7 +178,14 @@ async def analyze_and_reply(update: Update, token: str):
         confidence = prediction[pred_class]
 
         direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
-        current_price = df['close'].iloc[-1]
+        
+        # Récupérer le prix live
+        live_price = get_live_price(token)
+        if live_price is not None:
+            current_price = live_price
+        else:
+            current_price = df['close'].iloc[-1]  # fallback si l'API live échoue
+
         atr = df['atr'].iloc[-1]
 
         tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
@@ -187,11 +195,10 @@ async def analyze_and_reply(update: Update, token: str):
             f"📊 {token.upper()} - Signal IA\n"
             f"🎯 Direction: {direction}\n"
             f"📈 Confiance: {confidence*100:.2f}%\n"
-            f"💰 Prix actuel: {current_price:.2f}$\n"
+            f"💰 Prix live: {current_price:.2f}$\n"
             f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
         )
 
-        # Enregistrer les résultats dans l'historique
         history = load_history()
         result = {
             'token': token,
@@ -212,7 +219,6 @@ async def analyze_and_reply(update: Update, token: str):
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
-# Commande pour afficher l'historique des analyses
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     if history:
@@ -232,7 +238,7 @@ def main() -> None:
         states={
             ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
-        fallbacks=[CommandHandler('history', show_history)]  # Commande pour afficher l'historique
+        fallbacks=[CommandHandler('history', show_history)]
     )
 
     application.add_handler(conv_handler)
