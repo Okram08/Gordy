@@ -174,7 +174,7 @@ async def analyze_and_reply(update: Update, token: str):
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
-            model = Sequential([
+            model = Sequential([ 
                 Input(shape=(X_train.shape[1], X_train.shape[2])),
                 LSTM(64, return_sequences=True),
                 Dropout(0.3),
@@ -235,32 +235,36 @@ async def analyze_and_reply(update: Update, token: str):
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     if history:
-        messages = [f"Analyse pour {entry['token']} à {entry['timestamp']}\n"
-                    f"Direction: {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
-                    f"Prix actuel: {entry['current_price']}$ | TP: {entry['tp']}$ | SL: {entry['sl']}$\n"
-                    for entry in history]
-        await update.message.reply_text("\n\n".join(messages))
+        messages = []
+        for entry in history:
+            # Vérification des clés attendues
+            if 'token' in entry and 'timestamp' in entry and 'direction' in entry and 'confidence' in entry:
+                messages.append(f"Analyse pour {entry['token']} à {entry['timestamp']}\n"
+                                f"Direction: {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
+                                f"Prix actuel: {entry.get('current_price', 'N/A')}$ | TP: {entry.get('tp', 'N/A')}$ | SL: {entry.get('sl', 'N/A')}$\n")
+            else:
+                logging.warning(f"Entrée d'historique incomplète: {entry}")
+                
+        if messages:
+            await update.message.reply_text("\n\n".join(messages))
+        else:
+            await update.message.reply_text("Aucune analyse historique disponible.")
     else:
-        await update.message.reply_text("Aucune analyse historique disponible.")
+        await update.message.reply_text("Aucun historique trouvé.")
 
 
-def main() -> None:
+def main():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Ajout d'un gestionnaire pour la commande /history
-    application.add_handler(CommandHandler("history", show_history))
-
-    # Ajout du ConversationHandler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
-        fallbacks=[CommandHandler('history', show_history)]  # Ajout également ici
+        fallbacks=[CommandHandler('history', show_history)]
     )
 
     application.add_handler(conv_handler)
-
     application.run_polling()
 
 
