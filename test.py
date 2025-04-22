@@ -1,13 +1,11 @@
 import logging
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Désactiver CUDA (GPU) si non disponible
-
 import numpy as np
 import pandas as pd
 from io import BytesIO
 from functools import lru_cache
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -43,6 +41,7 @@ TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
+
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -59,13 +58,16 @@ def load_history():
         logging.info(f"Aucun fichier historique trouvé, création de {HISTORY_FILE}.")
         return []
 
+
 def save_history(history):
     try:
+        history = convert_to_float(history)
         with open(HISTORY_FILE, 'w') as f:
             json.dump(history, f, indent=4)
         logging.info(f"Historique sauvegardé avec {len(history)} éléments.")
     except Exception as e:
         logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
+
 
 def convert_to_float(value):
     if isinstance(value, (np.float32, np.float64, np.int64)):
@@ -77,6 +79,7 @@ def convert_to_float(value):
     else:
         return value
 
+
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
     try:
@@ -87,14 +90,15 @@ def get_crypto_data(token: str, days: int):
         logging.error(f"Erreur lors de la récupération des données pour {token}: {str(e)}")
         return None
 
-# 💡 AJOUT : fonction manquante
+
 def get_live_price(token: str):
     try:
         data = cg.get_price(ids=token, vs_currencies='usd')
-        return data[token]['usd']
+        return float(data[token]['usd'])
     except Exception as e:
-        logging.error(f"Erreur lors de la récupération du prix live pour {token} : {str(e)}")
+        logging.error(f"Erreur récupération prix live pour {token}: {str(e)}")
         return None
+
 
 def compute_macd(data):
     short_ema = data.ewm(span=12, adjust=False).mean()
@@ -103,11 +107,14 @@ def compute_macd(data):
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
+
 def compute_rsi(data, period=14):
     return ta.rsi(data, length=period)
 
+
 def compute_atr(high, low, close):
     return ta.atr(high, low, close, length=14)
+
 
 def generate_labels(df):
     df['return'] = np.log(df['close'] / df['close'].shift(1))
@@ -115,6 +122,7 @@ def generate_labels(df):
     df.dropna(inplace=True)
     df['label'] = df['label'] + 1
     return df
+
 
 def prepare_data(df, features):
     scaler = MinMaxScaler()
@@ -129,15 +137,22 @@ def prepare_data(df, features):
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("👋 Quel(s) token(s) veux-tu analyser ? (ex: bitcoin, ethereum, dogecoin) 📉")
     return ASK_TOKEN
 
+
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    tokens = [token.strip().lower() for token in update.message.text.split(',')]
+    response = update.message.text.lower()
+    if response == "non":
+        await update.message.reply_text("Merci d'avoir utilisé le bot ! 👋")
+        return ConversationHandler.END
+    tokens = [token.strip() for token in response.split(',')]
     for token in tokens:
         await analyze_and_reply(update, token)
-    return ConversationHandler.END
+    return await ask_continue(update, context)
+
 
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
@@ -220,6 +235,14 @@ async def analyze_and_reply(update: Update, token: str):
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
+
+async def ask_continue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[KeyboardButton("Oui"), KeyboardButton("Non")]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    await update.message.reply_text("Souhaites-tu analyser un autre token ? 🤔", reply_markup=reply_markup)
+    return ASK_TOKEN
+
+
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     if history:
@@ -232,8 +255,10 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Aucune analyse historique disponible.")
 
+
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
+
     application.add_handler(CommandHandler("history", show_history))
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
@@ -243,7 +268,9 @@ def main() -> None:
         fallbacks=[]
     )
     application.add_handler(conv_handler)
+
     application.run_polling()
+
 
 if __name__ == '__main__':
     main()
