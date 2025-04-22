@@ -44,7 +44,6 @@ CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
 
-# Fonction pour charger l'historique des analyses
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -62,7 +61,6 @@ def load_history():
         return []
 
 
-# Fonction pour récupérer les données des crypto-monnaies
 def get_crypto_data(token: str, days: int):
     try:
         if days > 90:
@@ -73,7 +71,6 @@ def get_crypto_data(token: str, days: int):
         return None
 
 
-# Fonction pour obtenir le prix actuel d'une crypto-monnaie
 def get_live_price(token: str):
     try:
         data = cg.get_price(ids=token, vs_currencies='usd')
@@ -83,7 +80,6 @@ def get_live_price(token: str):
         return None
 
 
-# Fonction pour calculer le MACD
 def compute_macd(data):
     short_ema = data.ewm(span=12, adjust=False).mean()
     long_ema = data.ewm(span=26, adjust=False).mean()
@@ -92,7 +88,6 @@ def compute_macd(data):
     return macd, signal
 
 
-# Fonction pour générer les labels (buy, sell, neutral)
 def generate_labels(df):
     df['return'] = np.log(df['close'] / df['close'].shift(1))
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
@@ -101,7 +96,6 @@ def generate_labels(df):
     return df
 
 
-# Fonction pour préparer les données d'entraînement et de test
 def prepare_data(df, features):
     scaler = MinMaxScaler()
     df_scaled = scaler.fit_transform(df[features])
@@ -116,7 +110,7 @@ def prepare_data(df, features):
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
 
-# Fonction de gestion des réponses Rasa et de récupération des demandes crypto
+# Fonction pour gérer les réponses Rasa et de récupérer les demandes crypto
 def get_rasa_response(message):
     try:
         url = "http://localhost:5005/webhooks/rest/webhook"  # URL de ton serveur Rasa
@@ -141,19 +135,17 @@ def get_rasa_response(message):
 
 # Fonction principale d'analyse de crypto-monnaie
 async def analyze_and_reply(update: Update, token: str):
-    rasa_message = get_rasa_response(token)
-
-    if rasa_message:
-        # Si la réponse est liée à l'analyse de crypto-monnaie, on passe à l'analyse
-        if "analyser" in rasa_message.lower():
-            await update.message.reply_text(f"📈 {rasa_message}")
-            await perform_crypto_analysis(update, token)
-        else:
-            # Si Rasa a renvoyé autre chose (par exemple, une réponse générique), on envoie la réponse de Rasa
-            await update.message.reply_text(f"Rasa dit : {rasa_message}")
-    else:
-        # Sinon, effectuer l'analyse comme précédemment
+    # Vérifier si c'est une demande d'analyse crypto
+    if token.lower() in ['bitcoin', 'btc', 'eth', 'ethereum', 'dogecoin']:  # Liste des tokens pris en charge
         await perform_crypto_analysis(update, token)
+    else:
+        # Sinon, gérer la réponse de Rasa
+        rasa_message = get_rasa_response(token)
+
+        if rasa_message:
+            await update.message.reply_text(f"Rasa dit : {rasa_message}")
+        else:
+            await update.message.reply_text("Désolé, je n'ai pas compris votre demande.")
 
 
 # Fonction pour effectuer l'analyse de la crypto-monnaie
