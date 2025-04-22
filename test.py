@@ -24,7 +24,6 @@ from tensorflow.keras.utils import to_categorical
 from datetime import datetime
 import json
 
-# Variables et paramètres de configuration
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -42,7 +41,7 @@ TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
-# Charger l'historique des analyses
+# Gestion robuste de l'historique (corrige les erreurs de format JSON)
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -55,11 +54,13 @@ def load_history():
             with open(HISTORY_FILE, 'w') as f:
                 json.dump([], f)
             return []
+        except Exception as e:
+            logging.error(f"Erreur inattendue lors du chargement de l'historique : {str(e)}")
+            return []
     else:
         logging.info(f"Aucun fichier historique trouvé, création de {HISTORY_FILE}.")
         return []
 
-# Sauvegarder l'historique des analyses
 def save_history(history):
     try:
         with open(HISTORY_FILE, 'w') as f:
@@ -68,7 +69,6 @@ def save_history(history):
     except Exception as e:
         logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
 
-# Conversion des données en float
 def convert_to_float(value):
     if isinstance(value, (np.float32, np.float64, np.int64)):
         return float(value)
@@ -79,7 +79,6 @@ def convert_to_float(value):
     else:
         return value
 
-# Récupérer les données crypto (OHLC) depuis l'API
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
     try:
@@ -90,16 +89,6 @@ def get_crypto_data(token: str, days: int):
         logging.error(f"Erreur lors de la récupération des données pour {token}: {str(e)}")
         return None
 
-# Récupérer le prix live
-def get_live_price(token: str):
-    try:
-        data = cg.get_price(ids=token, vs_currencies='usd')
-        return data[token]['usd'] if token in data else None
-    except Exception as e:
-        logging.error(f"Erreur lors de la récupération du prix live pour {token}: {str(e)}")
-        return None
-
-# Calcul du MACD
 def compute_macd(data):
     short_ema = data.ewm(span=12, adjust=False).mean()
     long_ema = data.ewm(span=26, adjust=False).mean()
@@ -107,15 +96,12 @@ def compute_macd(data):
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
-# Calcul du RSI
 def compute_rsi(data, period=14):
     return ta.rsi(data, length=period)
 
-# Calcul de l'ATR
 def compute_atr(high, low, close):
     return ta.atr(high, low, close, length=14)
 
-# Génération des labels pour classification
 def generate_labels(df):
     df['return'] = np.log(df['close'] / df['close'].shift(1))
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
@@ -123,21 +109,18 @@ def generate_labels(df):
     df['label'] = df['label'] + 1
     return df
 
-# Préparation des données pour le modèle
 def prepare_data(df, features):
     scaler = MinMaxScaler()
     df_scaled = scaler.fit_transform(df[features])
-
     X, y = [], []
     for i in range(LOOKBACK, len(df_scaled)):
         X.append(df_scaled[i - LOOKBACK:i])
         y.append(df['label'].values[i])
-
     X = np.array(X)
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
-# Commande /help
+# Commande d'aide interactive
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "🤖 *Commandes disponibles*\n"
@@ -148,12 +131,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
-# Commande /cancel
+# Commande d'annulation
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Analyse annulée. Reviens quand tu veux !", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# Fonction pour démarrer la conversation
+# Accueil personnalisé + boutons rapides
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     keyboard = [
@@ -167,10 +150,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return ASK_TOKEN
 
-# Fonction pour demander le token à analyser
+# Demande de token avec vérification et feedback utilisateur
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    logging.info(f"Utilisateur {user.id} ({user.username}) a envoyé: {update.message.text}")
     user_input = update.message.text.strip()
     if not user_input:
         await update.message.reply_text("⚠️ Merci d’entrer au moins un nom de token.")
@@ -184,7 +165,7 @@ async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("✅ Analyse(s) terminée(s). Utilise /history pour revoir les résultats.")
     return ConversationHandler.END
 
-# Fonction pour analyser un token et renvoyer les résultats
+# Analyse avec indicateur de progression et messages clairs
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_chat_action(action="typing")
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
@@ -230,7 +211,11 @@ async def analyze_and_reply(update: Update, token: str):
 
         direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
 
-        current_price = get_live_price(token)
+        # Récupère le prix live avec gestion d'erreur
+        try:
+            current_price = cg.get_price(ids=token, vs_currencies='usd')[token]['usd']
+        except Exception:
+            current_price = None
         if current_price is None:
             await update.message.reply_text(f"❌ Impossible de récupérer le prix en direct pour {token}. Réessaie plus tard.")
             return
@@ -266,7 +251,6 @@ async def analyze_and_reply(update: Update, token: str):
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
-# Fonction pour afficher l'historique
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     if history:
@@ -279,11 +263,8 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Aucune analyse historique disponible.")
 
-# Démarrer l'application
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    # Ajout des handlers
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("history", show_history))
     conv_handler = ConversationHandler(
@@ -294,7 +275,6 @@ def main() -> None:
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     application.add_handler(conv_handler)
-
     application.run_polling()
 
 if __name__ == '__main__':
