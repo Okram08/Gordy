@@ -2,19 +2,18 @@ import logging
 import os
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from io import BytesIO
 from functools import lru_cache
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
     ContextTypes,
-    ConversationHandler
+    ConversationHandler,
+    CallbackQueryHandler
 )
 from pycoingecko import CoinGeckoAPI
 from sklearn.preprocessing import MinMaxScaler
@@ -25,6 +24,7 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
 from datetime import datetime
 import json
+import matplotlib.pyplot as plt
 
 ASK_TOKEN = 0
 load_dotenv()
@@ -130,18 +130,13 @@ def prepare_data(df, features):
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    keyboard = [
-        [InlineKeyboardButton("Bitcoin", callback_data='bitcoin')],
-        [InlineKeyboardButton("Ethereum", callback_data='ethereum')],
-        [InlineKeyboardButton("Cardano", callback_data='cardano')],
-        [InlineKeyboardButton("Litecoin", callback_data='litecoin')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "👋 Salut ! Choisis une crypto-monnaie à analyser ou tape son nom.",
-        reply_markup=reply_markup
-    )
+    await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
     return ASK_TOKEN
+
+async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    token = update.message.text.strip().lower()
+    await analyze_and_reply(update, token)
+    return ConversationHandler.END
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -149,17 +144,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     token = query.data.lower()
     await analyze_and_reply(update, token)
 
-async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    token = update.message.text.strip().lower()
-    await analyze_and_reply(update, token)
-    return ConversationHandler.END
-
 async def analyze_and_reply(update: Update, token: str):
-    await update.message.reply_text(f"📈 Analyse de {token} en cours...")
+    # Utilisation de `callback_query.message.reply_text` au lieu de `update.message.reply_text`
+    await update.callback_query.message.reply_text(f"📈 Analyse de {token} en cours...")
+
     try:
         ohlc = get_crypto_data(token, 30)
         if not ohlc:
-            await update.message.reply_text("❌ Token non trouvé ou erreur API.")
+            await update.callback_query.message.reply_text("❌ Token non trouvé ou erreur API.")
             return
 
         df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
@@ -200,7 +192,7 @@ async def analyze_and_reply(update: Update, token: str):
 
         current_price = get_live_price(token)
         if current_price is None:
-            await update.message.reply_text("❌ Impossible de récupérer le prix en direct. Réessaie plus tard.")
+            await update.callback_query.message.reply_text("❌ Impossible de récupérer le prix en direct. Réessaie plus tard.")
             return
 
         atr = df['atr'].iloc[-1]
@@ -231,8 +223,8 @@ async def analyze_and_reply(update: Update, token: str):
         buf.seek(0)
 
         # Send the plot and analysis message
-        await update.message.reply_text(message)
-        await update.message.reply_photo(photo=buf)
+        await update.callback_query.message.reply_text(message)
+        await update.callback_query.message.reply_photo(photo=buf)
 
         # Save history
         history = load_history()
@@ -251,7 +243,7 @@ async def analyze_and_reply(update: Update, token: str):
 
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
-        await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
+        await update.callback_query.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
@@ -268,14 +260,12 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("history", show_history))
-    application.add_handler(CallbackQueryHandler(button))
-    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
-        fallbacks=[]
+        fallbacks=[CallbackQueryHandler(button)]
     )
     application.add_handler(conv_handler)
     application.run_polling()
