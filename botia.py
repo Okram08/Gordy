@@ -13,7 +13,7 @@ import httpx
 import json
 
 # === CONFIG ===
-TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
+TOKEN = os.getenv('TELEGRAM_TOKEN') or 'YOUR_TELEGRAM_BOT_TOKEN'
 MODELS_DIR = './models'
 if not os.path.exists(MODELS_DIR):
     os.makedirs(MODELS_DIR)
@@ -28,25 +28,25 @@ async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("❗ Usage: /analyse BTC")
         return
-    token = context.args[0].upper()
+    token = context.args[0].lower()
     await analyze_and_reply(update, token)
 
 # === API COINGECKO ===
 def get_crypto_data(symbol: str, days: int):
-    url = f"https://api.coingecko.com/api/v3/coins/{symbol.lower()}/market_chart?vs_currency=usd&days={days}"
+    url = f"https://api.coingecko.com/api/v3/coins/{symbol}/ohlc?vs_currency=usd&days={min(days,90)}"
     try:
         response = httpx.get(url)
         data = response.json()
-        return data['prices']
+        return data
     except Exception as e:
         logging.error(f"API Error for {symbol}: {e}")
         return None
 
 def get_live_price(symbol: str):
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd"
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies=usd"
     try:
         response = httpx.get(url)
-        return response.json()[symbol.lower()]['usd']
+        return response.json()[symbol]['usd']
     except:
         return None
 
@@ -76,9 +76,9 @@ def compute_atr(high, low, close, period=14):
 # === LABEL GENERATION ===
 def generate_labels(df):
     df['future'] = df['close'].shift(-1)
-    df['label'] = 1  # Neutral par défaut
-    df.loc[df['future'] > df['close'] * 1.005, 'label'] = 2  # Long
-    df.loc[df['future'] < df['close'] * 0.995, 'label'] = 0  # Short
+    df['label'] = 1
+    df.loc[df['future'] > df['close'] * 1.005, 'label'] = 2
+    df.loc[df['future'] < df['close'] * 0.995, 'label'] = 0
     return df.dropna()
 
 # === DATA PREPARATION ===
@@ -95,10 +95,10 @@ def prepare_data(df, features):
         y.append(df['label'].iloc[i+window])
     X = np.array(X)
     y = np.array(y)
-    y = np.eye(3)[y]  # One-hot encoding
+    y = np.eye(3)[y]
     return train_test_split(X, y, test_size=0.2, random_state=42)
 
-# === HISTORY (optional) ===
+# === HISTORY ===
 def load_history():
     if os.path.exists('history.json'):
         with open('history.json') as f:
@@ -200,6 +200,8 @@ async def analyze_and_reply(update: Update, token: str):
 
 # === MAIN ===
 if __name__ == '__main__':
+    import dotenv
+    dotenv.load_dotenv()
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("analyse", analyse))
