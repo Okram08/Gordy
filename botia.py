@@ -11,6 +11,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import httpx
 import json
+import dotenv  # ← ajouté
+
+dotenv.load_dotenv()  # ← déplacé en haut pour charger avant l'utilisation de os.getenv
 
 # === CONFIG ===
 TOKEN = os.getenv('TELEGRAM_TOKEN') or 'YOUR_TELEGRAM_BOT_TOKEN'
@@ -200,8 +203,6 @@ async def analyze_and_reply(update: Update, token: str):
 
 # === MAIN ===
 if __name__ == '__main__':
-    import dotenv
-    dotenv.load_dotenv()
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("analyse", analyse))
