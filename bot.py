@@ -242,7 +242,6 @@ async def ask_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("history", show_history))
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
