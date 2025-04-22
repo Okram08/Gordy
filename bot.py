@@ -12,8 +12,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    ConversationHandler,
-    CallbackQueryHandler
+    ConversationHandler
 )
 from pycoingecko import CoinGeckoAPI
 from sklearn.preprocessing import MinMaxScaler
@@ -26,7 +25,7 @@ from datetime import datetime
 import json
 
 ASK_TOKEN = 0
-CONFIRM_CONTINUE = 1  # Nouvelle étape pour demander à l'utilisateur s'il souhaite continuer ou non
+ASK_CONTINUE = 1  # Nouvel état pour demander si l'utilisateur veut continuer
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MODELS_DIR = 'models'
@@ -43,9 +42,103 @@ TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
-# ... (le reste de vos fonctions)
+def convert_to_float(value):
+    if isinstance(value, (np.float32, np.float64, np.int64)):
+        return float(value)
+    elif isinstance(value, dict):
+        return {k: convert_to_float(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [convert_to_float(v) for v in value]
+    else:
+        return value
 
-async def analyze_and_reply(update: Update, token: str):
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+                logging.info(f"Historique chargé avec {len(history)} éléments.")
+                return history
+        except json.JSONDecodeError:
+            logging.error(f"Erreur de formatage dans le fichier {HISTORY_FILE}, réinitialisation.")
+            with open(HISTORY_FILE, 'w') as f:
+                json.dump([], f)
+            return []
+    else:
+        logging.info(f"Aucun fichier historique trouvé, création de {HISTORY_FILE}.")
+        return []
+
+def save_history(history):
+    history = convert_to_float(history)
+    try:
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=4)
+        logging.info(f"Historique sauvegardé avec {len(history)} éléments.")
+    except Exception as e:
+        logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
+
+@lru_cache(maxsize=100)
+def get_crypto_data(token: str, days: int):
+    try:
+        if days > 90:
+            days = 90
+        return cg.get_coin_ohlc_by_id(id=token, vs_currency='usd', days=days)
+    except Exception as e:
+        logging.error(f"Erreur lors de la récupération des données pour {token}: {str(e)}")
+        return None
+
+def get_live_price(token: str):
+    try:
+        data = cg.get_price(ids=token, vs_currencies='usd')
+        return data[token]['usd'] if token in data else None
+    except Exception as e:
+        logging.error(f"Erreur API prix live pour {token}: {str(e)}")
+        return None
+
+def compute_macd(data):
+    short_ema = data.ewm(span=12, adjust=False).mean()
+    long_ema = data.ewm(span=26, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal = macd.ewm(span=9, adjust=False).mean()
+    return macd, signal
+
+def compute_rsi(data, period=14):
+    return ta.rsi(data, length=period)
+
+def compute_atr(high, low, close):
+    return ta.atr(high, low, close, length=14)
+
+def generate_labels(df):
+    df['return'] = np.log(df['close'] / df['close'].shift(1))
+    df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
+    df.dropna(inplace=True)
+    df['label'] = df['label'] + 1
+    return df
+
+def prepare_data(df, features):
+    scaler = MinMaxScaler()
+    df_scaled = scaler.fit_transform(df[features])
+
+    X, y = [], []
+    for i in range(LOOKBACK, len(df_scaled)):
+        X.append(df_scaled[i - LOOKBACK:i])
+        y.append(df['label'].values[i])
+
+    X = np.array(X)
+    y = to_categorical(np.array(y), num_classes=3)
+    return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("👋 Quel(s) token(s) veux-tu analyser ? (ex: bitcoin, ethereum, dogecoin) 📉")
+    return ASK_TOKEN
+
+async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    tokens = [token.strip().lower() for token in update.message.text.split(',')]
+    for token in tokens:
+        await analyze_and_reply(update, token)
+    return ASK_CONTINUE  # Demande si l'utilisateur souhaite continuer
+
+async def analyze_and_reply(update: Update, token: str) -> None:
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
     try:
         ohlc = get_crypto_data(token, 30)
@@ -122,63 +215,42 @@ async def analyze_and_reply(update: Update, token: str):
 
         await update.message.reply_text(message)
 
-        # Demander à l'utilisateur s'il veut analyser une autre crypto
-        keyboard = [
-            [
-                {'text': 'Oui, analyser une autre crypto', 'callback_data': 'yes'},
-                {'text': 'Non, arrêter', 'callback_data': 'no'}
-            ]
-        ]
-        reply_markup = {'inline_keyboard': keyboard}
-        await update.message.reply_text(
-            "🔁 Veux-tu analyser une autre cryptomonnaie ?",
-            reply_markup=reply_markup
-        )
+        # Demander à l'utilisateur s'il souhaite analyser un autre token
+        await update.message.reply_text("Voulez-vous analyser un autre token ? (Oui/Non)")
+
+        return ASK_CONTINUE  # Nouveau état pour demander si l'utilisateur veut continuer
 
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
+async def ask_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_response = update.message.text.strip().lower()
 
-async def handle_continue(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == 'yes':
-        await update.message.reply_text("👋 Quel(s) token(s) veux-tu analyser ? (ex: bitcoin, ethereum, dogecoin) 📉")
+    if user_response in ["oui", "yes"]:
+        # Revenir à l'état de demande de token
+        await update.message.reply_text("Quel(s) token(s) voulez-vous analyser ? (ex: bitcoin, ethereum, dogecoin) 📉")
         return ASK_TOKEN
+
+    elif user_response in ["non", "no"]:
+        await update.message.reply_text("D'accord, à bientôt ! 👋")
+        return ConversationHandler.END  # Terminer la conversation
+
     else:
-        await update.message.reply_text("🔴 Arrêt de l'analyse. À bientôt !")
-        return ConversationHandler.END
-
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("👋 Quel(s) token(s) veux-tu analyser ? (ex: bitcoin, ethereum, dogecoin) 📉")
-    return ASK_TOKEN
-
-async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    tokens = [token.strip().lower() for token in update.message.text.split(',')]
-    for token in tokens:
-        await analyze_and_reply(update, token)
-    return CONFIRM_CONTINUE
+        await update.message.reply_text("Désolé, je n'ai pas compris. Veuillez répondre par 'Oui' ou 'Non'.")
+        return ASK_CONTINUE
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # Ajouter un gestionnaire de callback pour gérer les réponses du bouton "Oui/Non"
-    application.add_handler(CallbackQueryHandler(handle_continue))
-    
     application.add_handler(CommandHandler("history", show_history))
-    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
-            CONFIRM_CONTINUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)]
+            ASK_CONTINUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_continue)],  # Nouveau état
         },
         fallbacks=[]
     )
-    
     application.add_handler(conv_handler)
     application.run_polling()
 
