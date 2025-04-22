@@ -1,125 +1,163 @@
 import logging
 import os
-import pandas as pd
 import numpy as np
-from datetime import datetime
-from keras.models import Sequential, load_model
-from keras.layers import LSTM, Dropout, Dense, Input
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
+import pandas as pd
+from io import BytesIO
+from functools import lru_cache
+from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import httpx
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ConversationHandler
+)
+from pycoingecko import CoinGeckoAPI
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+import pandas_ta as ta
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.utils import to_categorical
+from datetime import datetime
 import json
-import dotenv  # ← ajouté
+import requests  # Ajout de l'import pour l'API Ollama
 
-dotenv.load_dotenv()  # ← déplacé en haut pour charger avant l'utilisation de os.getenv
+ASK_TOKEN = 0
+load_dotenv()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+MODELS_DIR = 'models'
+os.makedirs(MODELS_DIR, exist_ok=True)
 
-# === CONFIG ===
-TOKEN = os.getenv('TELEGRAM_TOKEN') or 'YOUR_TELEGRAM_BOT_TOKEN'
-MODELS_DIR = './models'
-if not os.path.exists(MODELS_DIR):
-    os.makedirs(MODELS_DIR)
+cg = CoinGeckoAPI()
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-logging.basicConfig(level=logging.INFO)
+LOOKBACK = 24
+TRAIN_TEST_RATIO = 0.8
+CLASS_THRESHOLD = 0.003
+HISTORY_FILE = 'analysis_history.json'
 
-# === TELEGRAM COMMAND ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Salut ! Envoie-moi un nom de crypto comme /analyse BTC pour commencer.")
+def convert_to_float(value):
+    if isinstance(value, (np.float32, np.float64, np.int64)):
+        return float(value)
+    elif isinstance(value, dict):
+        return {k: convert_to_float(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [convert_to_float(v) for v in value]
+    else:
+        return value
 
-async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❗ Usage: /analyse BTC")
-        return
-    token = context.args[0].lower()
-    await analyze_and_reply(update, token)
-
-# === API COINGECKO ===
-def get_crypto_data(symbol: str, days: int):
-    url = f"https://api.coingecko.com/api/v3/coins/{symbol}/ohlc?vs_currency=usd&days={min(days,90)}"
-    try:
-        response = httpx.get(url)
-        data = response.json()
-        return data
-    except Exception as e:
-        logging.error(f"API Error for {symbol}: {e}")
-        return None
-
-def get_live_price(symbol: str):
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies=usd"
-    try:
-        response = httpx.get(url)
-        return response.json()[symbol]['usd']
-    except:
-        return None
-
-# === TECHNICAL INDICATORS ===
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def compute_macd(series, short=12, long=26, signal=9):
-    short_ema = series.ewm(span=short, adjust=False).mean()
-    long_ema = series.ewm(span=long, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal_line = macd.ewm(span=signal, adjust=False).mean()
-    return macd, signal_line
-
-def compute_atr(high, low, close, period=14):
-    tr = pd.concat([
-        high - low,
-        abs(high - close.shift()),
-        abs(low - close.shift())
-    ], axis=1).max(axis=1)
-    return tr.rolling(window=period).mean()
-
-# === LABEL GENERATION ===
-def generate_labels(df):
-    df['future'] = df['close'].shift(-1)
-    df['label'] = 1
-    df.loc[df['future'] > df['close'] * 1.005, 'label'] = 2
-    df.loc[df['future'] < df['close'] * 0.995, 'label'] = 0
-    return df.dropna()
-
-# === DATA PREPARATION ===
-def prepare_data(df, features):
-    df = df.dropna()
-    scaler = MinMaxScaler()
-    df[features] = scaler.fit_transform(df[features])
-
-    X = []
-    y = []
-    window = 10
-    for i in range(len(df) - window):
-        X.append(df[features].iloc[i:i+window].values)
-        y.append(df['label'].iloc[i+window])
-    X = np.array(X)
-    y = np.array(y)
-    y = np.eye(3)[y]
-    return train_test_split(X, y, test_size=0.2, random_state=42)
-
-# === HISTORY ===
 def load_history():
-    if os.path.exists('history.json'):
-        with open('history.json') as f:
-            return json.load(f)
-    return []
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+                logging.info(f"Historique chargé avec {len(history)} éléments.")
+                return history
+        except json.JSONDecodeError:
+            logging.error(f"Erreur de formatage dans le fichier {HISTORY_FILE}, réinitialisation.")
+            with open(HISTORY_FILE, 'w') as f:
+                json.dump([], f)
+            return []
+    else:
+        logging.info(f"Aucun fichier historique trouvé, création de {HISTORY_FILE}.")
+        return []
 
-def save_history(data):
-    with open('history.json', 'w') as f:
-        json.dump(data, f, indent=4)
+def save_history(history):
+    history = convert_to_float(history)
+    try:
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=4)
+        logging.info(f"Historique sauvegardé avec {len(history)} éléments.")
+    except Exception as e:
+        logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
 
-# === AI ANALYSIS FUNCTION ===
+@lru_cache(maxsize=100)
+def get_crypto_data(token: str, days: int):
+    try:
+        if days > 90:
+            days = 90
+        return cg.get_coin_ohlc_by_id(id=token, vs_currency='usd', days=days)
+    except Exception as e:
+        logging.error(f"Erreur lors de la récupération des données pour {token}: {str(e)}")
+        return None
+
+def get_live_price(token: str):
+    try:
+        data = cg.get_price(ids=token, vs_currencies='usd')
+        return data[token]['usd'] if token in data else None
+    except Exception as e:
+        logging.error(f"Erreur API prix live pour {token}: {str(e)}")
+        return None
+
+def compute_macd(data):
+    short_ema = data.ewm(span=12, adjust=False).mean()
+    long_ema = data.ewm(span=26, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal = macd.ewm(span=9, adjust=False).mean()
+    return macd, signal
+
+def compute_rsi(data, period=14):
+    return ta.rsi(data, length=period)
+
+def compute_atr(high, low, close):
+    return ta.atr(high, low, close, length=14)
+
+def generate_labels(df):
+    df['return'] = np.log(df['close'] / df['close'].shift(1))
+    df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
+    df.dropna(inplace=True)
+    df['label'] = df['label'] + 1
+    return df
+
+def prepare_data(df, features):
+    scaler = MinMaxScaler()
+    df_scaled = scaler.fit_transform(df[features])
+
+    X, y = [], []
+    for i in range(LOOKBACK, len(df_scaled)):
+        X.append(df_scaled[i - LOOKBACK:i])
+        y.append(df['label'].values[i])
+
+    X = np.array(X)
+    y = to_categorical(np.array(y), num_classes=3)
+    return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
+
+# Fonction pour interroger Ollama
+def ask_ollama(prompt: str, model: str = "mistral") -> str:
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={"model": model, "prompt": prompt, "stream": False}
+        )
+        if response.status_code == 200:
+            return response.json().get("response", "❌ Réponse vide.")
+        else:
+            return f"❌ Erreur de l'IA ({response.status_code})"
+    except Exception as e:
+        logging.error(f"Erreur avec Ollama: {e}")
+        return f"❌ Erreur de connexion à l'IA : {str(e)}"
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
+    return ASK_TOKEN
+
+async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    token = update.message.text.strip().lower()
+    await analyze_and_reply(update, token)
+    return ConversationHandler.END
+
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
-
     try:
         ohlc = get_crypto_data(token, 30)
         if not ohlc:
-            await update.message.reply_text("❌ Token non trouvé")
+            await update.message.reply_text("❌ Token non trouvé ou erreur API.")
             return
 
         df = pd.DataFrame(ohlc, columns=['timestamp', 'open', 'high', 'low', 'close'])
@@ -129,12 +167,7 @@ async def analyze_and_reply(update: Update, token: str):
         df['macd'], df['signal'] = compute_macd(df['close'])
         df['rsi'] = compute_rsi(df['close'])
         df['atr'] = compute_atr(df['high'], df['low'], df['close'])
-
         df = generate_labels(df)
-
-        if df.empty or 'label' not in df.columns or df['label'].nunique() < 2:
-            await update.message.reply_text("❌ Pas assez de données ou de signaux pour entraîner le modèle.")
-            return
 
         features = ['rsi', 'macd', 'atr']
         X_train, X_test, y_train, y_test = prepare_data(df, features)
@@ -144,16 +177,16 @@ async def analyze_and_reply(update: Update, token: str):
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
-            model = Sequential([
-                Input(shape=(X_train.shape[1], X_train.shape[2])),
-                LSTM(64, return_sequences=True),
-                Dropout(0.3),
-                LSTM(32),
-                Dropout(0.2),
-                Dense(3, activation='softmax')
-            ])
-            model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
+            model = Sequential([ 
+                Input(shape=(X_train.shape[1], X_train.shape[2])), 
+                LSTM(64, return_sequences=True), 
+                Dropout(0.3), 
+                LSTM(32), 
+                Dropout(0.2), 
+                Dense(3, activation='softmax') 
+            ]) 
+            model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy']) 
+            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0) 
             model.save(model_path)
 
         last_sequence = X_test[-1:]
@@ -169,7 +202,6 @@ async def analyze_and_reply(update: Update, token: str):
             return
 
         atr = df['atr'].iloc[-1]
-
         tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
         sl = current_price - atr if pred_class == 2 else (current_price + atr if pred_class == 0 else current_price)
 
@@ -187,24 +219,62 @@ async def analyze_and_reply(update: Update, token: str):
             'timestamp': str(datetime.now()),
             'direction': direction,
             'confidence': confidence,
-            'pred_class': pred_class,
-            'current_price': current_price,
-            'tp': tp,
-            'sl': sl
+            'pred_class': int(pred_class),
+            'current_price': float(current_price),
+            'tp': float(tp),
+            'sl': float(sl)
         }
         history.append(result)
         save_history(history)
 
         await update.message.reply_text(message)
 
+        # Suggestion pour interroger l'IA après l'analyse
+        await update.message.reply_text(
+            "💡 Tu peux maintenant poser une question à l'IA sur cette analyse avec la commande :\n"
+            f"`/ask Que signifie ce signal pour {token} ?`", parse_mode="Markdown"
+        )
+
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
-# === MAIN ===
+# Commande pour poser une question à l'IA
+async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("💬 Utilise la commande comme ceci :\n`/ask Quel est l'avenir du Bitcoin ?`", parse_mode="Markdown")
+        return
+
+    question = " ".join(context.args)
+    await update.message.reply_text("🤖 Je consulte l'IA, un instant...")
+    response = ask_ollama(question)
+    await update.message.reply_text(response)
+
+async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    history = load_history()
+    if history:
+        messages = [
+            f"🕒 {entry['timestamp']}\n📉 {entry['token'].upper()} | {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
+            f"💰 Prix: {entry['current_price']:.2f}$ | TP: {entry['tp']:.2f}$ | SL: {entry['sl']:.2f}$\n"
+            for entry in history[-5:]
+        ]
+        await update.message.reply_text("\n\n".join(messages))
+    else:
+        await update.message.reply_text("Aucune analyse historique disponible.")
+
+def main() -> None:
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("history", show_history))
+    application.add_handler(CommandHandler("ask", ask_ai))  # Ajout de la commande pour interroger l'IA
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
+        },
+        fallbacks=[]
+    )
+    application.add_handler(conv_handler)
+    application.run_polling()
+
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("analyse", analyse))
-    print("✅ Bot prêt")
-    app.run_polling()
+    main()
