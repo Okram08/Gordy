@@ -1,5 +1,6 @@
 import logging
 import os
+import requests
 import numpy as np
 import pandas as pd
 from io import BytesIO
@@ -23,9 +24,7 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
 from datetime import datetime
 import json
-import requests
 
-# Constants et configurations
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -33,6 +32,7 @@ MODELS_DIR = 'models'
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 cg = CoinGeckoAPI()
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -43,17 +43,8 @@ TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
-# Chargement et sauvegarde de l'historique
-def convert_to_float(value):
-    if isinstance(value, (np.float32, np.float64, np.int64)):
-        return float(value)
-    elif isinstance(value, dict):
-        return {k: convert_to_float(v) for k, v in value.items()}
-    elif isinstance(value, list):
-        return [convert_to_float(v) for v in value]
-    else:
-        return value
 
+# Fonction pour charger l'historique des analyses
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -70,17 +61,8 @@ def load_history():
         logging.info(f"Aucun fichier historique trouvé, création de {HISTORY_FILE}.")
         return []
 
-def save_history(history):
-    history = convert_to_float(history)
-    try:
-        with open(HISTORY_FILE, 'w') as f:
-            json.dump(history, f, indent=4)
-        logging.info(f"Historique sauvegardé avec {len(history)} éléments.")
-    except Exception as e:
-        logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
 
-# API Crypto
-@lru_cache(maxsize=100)
+# Fonction pour récupérer les données des crypto-monnaies
 def get_crypto_data(token: str, days: int):
     try:
         if days > 90:
@@ -90,6 +72,8 @@ def get_crypto_data(token: str, days: int):
         logging.error(f"Erreur lors de la récupération des données pour {token}: {str(e)}")
         return None
 
+
+# Fonction pour obtenir le prix actuel d'une crypto-monnaie
 def get_live_price(token: str):
     try:
         data = cg.get_price(ids=token, vs_currencies='usd')
@@ -98,7 +82,8 @@ def get_live_price(token: str):
         logging.error(f"Erreur API prix live pour {token}: {str(e)}")
         return None
 
-# Calcul des indicateurs techniques
+
+# Fonction pour calculer le MACD
 def compute_macd(data):
     short_ema = data.ewm(span=12, adjust=False).mean()
     long_ema = data.ewm(span=26, adjust=False).mean()
@@ -106,12 +91,8 @@ def compute_macd(data):
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
-def compute_rsi(data, period=14):
-    return ta.rsi(data, length=period)
 
-def compute_atr(high, low, close):
-    return ta.atr(high, low, close, length=14)
-
+# Fonction pour générer les labels (buy, sell, neutral)
 def generate_labels(df):
     df['return'] = np.log(df['close'] / df['close'].shift(1))
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
@@ -119,6 +100,8 @@ def generate_labels(df):
     df['label'] = df['label'] + 1
     return df
 
+
+# Fonction pour préparer les données d'entraînement et de test
 def prepare_data(df, features):
     scaler = MinMaxScaler()
     df_scaled = scaler.fit_transform(df[features])
@@ -132,7 +115,8 @@ def prepare_data(df, features):
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
-# Fonction pour obtenir la réponse de Rasa
+
+# Fonction de gestion des réponses Rasa et de récupération des demandes crypto
 def get_rasa_response(message):
     try:
         url = "http://localhost:5005/webhooks/rest/webhook"  # URL de ton serveur Rasa
@@ -143,7 +127,10 @@ def get_rasa_response(message):
         headers = {"Content-Type": "application/json"}
         response = requests.post(url, json=payload, headers=headers)
         if response.status_code == 200:
-            return response.json()[0]['text']
+            rasa_messages = response.json()
+            if rasa_messages:
+                return rasa_messages[0].get('text', '').lower()
+            return None
         else:
             logging.error(f"Erreur avec Rasa API: {response.status_code}")
             return None
@@ -151,30 +138,28 @@ def get_rasa_response(message):
         logging.error(f"Erreur lors de l'appel à Rasa: {str(e)}")
         return None
 
-# Fonction pour commencer la conversation
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
-    return ASK_TOKEN
 
-# Fonction pour demander le token à analyser
-async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    token = update.message.text.strip().lower()
-    await analyze_and_reply(update, token)
-    return ConversationHandler.END
-
-# Fonction principale pour analyser et répondre
+# Fonction principale d'analyse de crypto-monnaie
 async def analyze_and_reply(update: Update, token: str):
+    rasa_message = get_rasa_response(token)
+
+    if rasa_message:
+        # Si la réponse est liée à l'analyse de crypto-monnaie, on passe à l'analyse
+        if "analyser" in rasa_message.lower():
+            await update.message.reply_text(f"📈 {rasa_message}")
+            await perform_crypto_analysis(update, token)
+        else:
+            # Si Rasa a renvoyé autre chose (par exemple, une réponse générique), on envoie la réponse de Rasa
+            await update.message.reply_text(f"Rasa dit : {rasa_message}")
+    else:
+        # Sinon, effectuer l'analyse comme précédemment
+        await perform_crypto_analysis(update, token)
+
+
+# Fonction pour effectuer l'analyse de la crypto-monnaie
+async def perform_crypto_analysis(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
 
-    # Demander à Rasa une réponse pour l'utilisateur
-    rasa_message = update.message.text.strip()  # Texte envoyé par l'utilisateur
-    rasa_response = get_rasa_response(rasa_message)
-    
-    if rasa_response:
-        await update.message.reply_text(f"Rasa dit : {rasa_response}")
-        return
-
-    # Si Rasa ne donne pas de réponse, procéder à l'analyse du crypto-marché comme avant
     try:
         ohlc = get_crypto_data(token, 30)
         if not ohlc:
@@ -186,52 +171,18 @@ async def analyze_and_reply(update: Update, token: str):
         df.set_index('timestamp', inplace=True)
 
         df['macd'], df['signal'] = compute_macd(df['close'])
-        df['rsi'] = compute_rsi(df['close'])
-        df['atr'] = compute_atr(df['high'], df['low'], df['close'])
         df = generate_labels(df)
-
-        features = ['rsi', 'macd', 'atr']
-        X_train, X_test, y_train, y_test = prepare_data(df, features)
-
-        model_path = os.path.join(MODELS_DIR, f'{token}_clf_model.keras')
-
-        if os.path.exists(model_path):
-            model = load_model(model_path)
-        else:
-            model = Sequential([ 
-                Input(shape=(X_train.shape[1], X_train.shape[2])),
-                LSTM(64, return_sequences=True),
-                Dropout(0.3),
-                LSTM(32),
-                Dropout(0.2),
-                Dense(3, activation='softmax')
-            ])
-            model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
-            model.save(model_path)
-
-        last_sequence = X_test[-1:]
-        prediction = model.predict(last_sequence, verbose=0)[0]
-        pred_class = np.argmax(prediction)
-        confidence = prediction[pred_class]
-
-        direction = "⬆️ LONG" if pred_class == 2 else ("⬇️ SHORT" if pred_class == 0 else "🔁 NEUTRE")
 
         current_price = get_live_price(token)
         if current_price is None:
             await update.message.reply_text("❌ Impossible de récupérer le prix en direct. Réessaie plus tard.")
             return
 
-        atr = df['atr'].iloc[-1]
-        tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
-        sl = current_price - atr if pred_class == 2 else (current_price + atr if pred_class == 0 else current_price)
-
+        direction = "⬆️ LONG" if df['label'].iloc[-1] == 2 else ("⬇️ SHORT" if df['label'].iloc[-1] == 0 else "🔁 NEUTRE")
         message = (
             f"📊 {token.upper()} - Signal IA\n"
             f"🎯 Direction: {direction}\n"
-            f"📈 Confiance: {confidence*100:.2f}%\n"
             f"💰 Prix live: {current_price:.2f}$\n"
-            f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
         )
 
         history = load_history()
@@ -239,11 +190,7 @@ async def analyze_and_reply(update: Update, token: str):
             'token': token,
             'timestamp': str(datetime.now()),
             'direction': direction,
-            'confidence': confidence,
-            'pred_class': int(pred_class),
             'current_price': float(current_price),
-            'tp': float(tp),
-            'sl': float(sl)
         }
         history.append(result)
         save_history(history)
@@ -254,32 +201,45 @@ async def analyze_and_reply(update: Update, token: str):
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
-# Fonction pour afficher l'historique
+
+# Fonction pour commencer une conversation
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
+    return ASK_TOKEN
+
+
+# Fonction pour gérer la demande de token
+async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    token = update.message.text.strip().lower()
+    await analyze_and_reply(update, token)
+    return ConversationHandler.END
+
+
+# Fonction pour afficher l'historique des analyses
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     if history:
         messages = [
-            f"🕒 {entry['timestamp']}\n📉 {entry['token'].upper()} | {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
-            f"💰 Prix: {entry['current_price']:.2f}$ | TP: {entry['tp']:.2f}$ | SL: {entry['sl']:.2f}$\n"
+            f"🕒 {entry['timestamp']}\n📉 {entry['token'].upper()} | {entry['direction']}\n"
             for entry in history[-5:]
         ]
         await update.message.reply_text("\n\n".join(messages))
     else:
         await update.message.reply_text("Aucune analyse historique disponible.")
 
-# Démarrer le bot
+
+# Fonction principale de configuration du bot Telegram
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("history", show_history))
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
-        states={
-            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
-        },
+        states={ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)]},
         fallbacks=[]
     )
     application.add_handler(conv_handler)
     application.run_polling()
+
 
 if __name__ == '__main__':
     main()
