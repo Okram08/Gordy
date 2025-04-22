@@ -23,8 +23,9 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
 from datetime import datetime
 import json
-import requests  # Ajout de l'import pour l'API Ollama
+import requests
 
+# Constants et configurations
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -42,6 +43,7 @@ TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
+# Chargement et sauvegarde de l'historique
 def convert_to_float(value):
     if isinstance(value, (np.float32, np.float64, np.int64)):
         return float(value)
@@ -77,6 +79,7 @@ def save_history(history):
     except Exception as e:
         logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
 
+# API Crypto
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
     try:
@@ -95,6 +98,7 @@ def get_live_price(token: str):
         logging.error(f"Erreur API prix live pour {token}: {str(e)}")
         return None
 
+# Calcul des indicateurs techniques
 def compute_macd(data):
     short_ema = data.ewm(span=12, adjust=False).mean()
     long_ema = data.ewm(span=26, adjust=False).mean()
@@ -128,32 +132,49 @@ def prepare_data(df, features):
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
-# Fonction pour interroger Ollama
-def ask_ollama(prompt: str, model: str = "mistral") -> str:
+# Fonction pour obtenir la réponse de Rasa
+def get_rasa_response(message):
     try:
-        response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False}
-        )
+        url = "http://localhost:5005/webhooks/rest/webhook"  # URL de ton serveur Rasa
+        payload = {
+            "sender": "telegram_user",
+            "message": message
+        }
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(url, json=payload, headers=headers)
         if response.status_code == 200:
-            return response.json().get("response", "❌ Réponse vide.")
+            return response.json()[0]['text']
         else:
-            return f"❌ Erreur de l'IA ({response.status_code})"
+            logging.error(f"Erreur avec Rasa API: {response.status_code}")
+            return None
     except Exception as e:
-        logging.error(f"Erreur avec Ollama: {e}")
-        return f"❌ Erreur de connexion à l'IA : {str(e)}"
+        logging.error(f"Erreur lors de l'appel à Rasa: {str(e)}")
+        return None
 
+# Fonction pour commencer la conversation
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
     return ASK_TOKEN
 
+# Fonction pour demander le token à analyser
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     token = update.message.text.strip().lower()
     await analyze_and_reply(update, token)
     return ConversationHandler.END
 
+# Fonction principale pour analyser et répondre
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
+
+    # Demander à Rasa une réponse pour l'utilisateur
+    rasa_message = update.message.text.strip()  # Texte envoyé par l'utilisateur
+    rasa_response = get_rasa_response(rasa_message)
+    
+    if rasa_response:
+        await update.message.reply_text(f"Rasa dit : {rasa_response}")
+        return
+
+    # Si Rasa ne donne pas de réponse, procéder à l'analyse du crypto-marché comme avant
     try:
         ohlc = get_crypto_data(token, 30)
         if not ohlc:
@@ -178,15 +199,15 @@ async def analyze_and_reply(update: Update, token: str):
             model = load_model(model_path)
         else:
             model = Sequential([ 
-                Input(shape=(X_train.shape[1], X_train.shape[2])), 
-                LSTM(64, return_sequences=True), 
-                Dropout(0.3), 
-                LSTM(32), 
-                Dropout(0.2), 
-                Dense(3, activation='softmax') 
-            ]) 
-            model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy']) 
-            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0) 
+                Input(shape=(X_train.shape[1], X_train.shape[2])),
+                LSTM(64, return_sequences=True),
+                Dropout(0.3),
+                LSTM(32),
+                Dropout(0.2),
+                Dense(3, activation='softmax')
+            ])
+            model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+            model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=0)
             model.save(model_path)
 
         last_sequence = X_test[-1:]
@@ -229,27 +250,11 @@ async def analyze_and_reply(update: Update, token: str):
 
         await update.message.reply_text(message)
 
-        # Suggestion pour interroger l'IA après l'analyse
-        await update.message.reply_text(
-            "💡 Tu peux maintenant poser une question à l'IA sur cette analyse avec la commande :\n"
-            f"`/ask Que signifie ce signal pour {token} ?`", parse_mode="Markdown"
-        )
-
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
-# Commande pour poser une question à l'IA
-async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("💬 Utilise la commande comme ceci :\n`/ask Quel est l'avenir du Bitcoin ?`", parse_mode="Markdown")
-        return
-
-    question = " ".join(context.args)
-    await update.message.reply_text("🤖 Je consulte l'IA, un instant...")
-    response = ask_ollama(question)
-    await update.message.reply_text(response)
-
+# Fonction pour afficher l'historique
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     if history:
@@ -262,10 +267,10 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Aucune analyse historique disponible.")
 
+# Démarrer le bot
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("history", show_history))
-    application.add_handler(CommandHandler("ask", ask_ai))  # Ajout de la commande pour interroger l'IA
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
