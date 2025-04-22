@@ -1,5 +1,7 @@
 import logging
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Désactiver CUDA (GPU) si non disponible
+
 import numpy as np
 import pandas as pd
 from io import BytesIO
@@ -24,7 +26,6 @@ from tensorflow.keras.utils import to_categorical
 from datetime import datetime
 import json
 
-# Variables et paramètres de configuration
 ASK_TOKEN = 0
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -42,7 +43,6 @@ TRAIN_TEST_RATIO = 0.8
 CLASS_THRESHOLD = 0.003
 HISTORY_FILE = 'analysis_history.json'
 
-# Charger l'historique des analyses
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -59,7 +59,6 @@ def load_history():
         logging.info(f"Aucun fichier historique trouvé, création de {HISTORY_FILE}.")
         return []
 
-# Sauvegarder l'historique des analyses
 def save_history(history):
     try:
         with open(HISTORY_FILE, 'w') as f:
@@ -68,7 +67,6 @@ def save_history(history):
     except Exception as e:
         logging.error(f"Erreur lors de l'écriture dans le fichier JSON : {str(e)}")
 
-# Conversion des données en float
 def convert_to_float(value):
     if isinstance(value, (np.float32, np.float64, np.int64)):
         return float(value)
@@ -79,7 +77,6 @@ def convert_to_float(value):
     else:
         return value
 
-# Récupérer les données crypto (OHLC) depuis l'API
 @lru_cache(maxsize=100)
 def get_crypto_data(token: str, days: int):
     try:
@@ -90,7 +87,15 @@ def get_crypto_data(token: str, days: int):
         logging.error(f"Erreur lors de la récupération des données pour {token}: {str(e)}")
         return None
 
-# Calcul du MACD
+# 💡 AJOUT : fonction manquante
+def get_live_price(token: str):
+    try:
+        data = cg.get_price(ids=token, vs_currencies='usd')
+        return data[token]['usd']
+    except Exception as e:
+        logging.error(f"Erreur lors de la récupération du prix live pour {token} : {str(e)}")
+        return None
+
 def compute_macd(data):
     short_ema = data.ewm(span=12, adjust=False).mean()
     long_ema = data.ewm(span=26, adjust=False).mean()
@@ -98,15 +103,12 @@ def compute_macd(data):
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
-# Calcul du RSI
 def compute_rsi(data, period=14):
     return ta.rsi(data, length=period)
 
-# Calcul de l'ATR
 def compute_atr(high, low, close):
     return ta.atr(high, low, close, length=14)
 
-# Génération des labels pour classification
 def generate_labels(df):
     df['return'] = np.log(df['close'] / df['close'].shift(1))
     df['label'] = 1 * (df['return'] > CLASS_THRESHOLD) + (-1) * (df['return'] < -CLASS_THRESHOLD)
@@ -114,7 +116,6 @@ def generate_labels(df):
     df['label'] = df['label'] + 1
     return df
 
-# Préparation des données pour le modèle
 def prepare_data(df, features):
     scaler = MinMaxScaler()
     df_scaled = scaler.fit_transform(df[features])
@@ -128,19 +129,16 @@ def prepare_data(df, features):
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
-# Fonction pour démarrer la conversation
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("👋 Quel(s) token(s) veux-tu analyser ? (ex: bitcoin, ethereum, dogecoin) 📉")
     return ASK_TOKEN
 
-# Fonction pour demander le token à analyser
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tokens = [token.strip().lower() for token in update.message.text.split(',')]
     for token in tokens:
         await analyze_and_reply(update, token)
     return ConversationHandler.END
 
-# Fonction pour analyser un token et renvoyer les résultats
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
     try:
@@ -166,7 +164,7 @@ async def analyze_and_reply(update: Update, token: str):
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
-            model = Sequential([  # Création et entraînement du modèle si il n'existe pas
+            model = Sequential([
                 Input(shape=(X_train.shape[1], X_train.shape[2])),
                 LSTM(64, return_sequences=True),
                 Dropout(0.3),
@@ -222,7 +220,6 @@ async def analyze_and_reply(update: Update, token: str):
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
-# Fonction pour afficher l'historique
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     if history:
@@ -235,11 +232,8 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Aucune analyse historique disponible.")
 
-# Démarrer l'application
 def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    # Ajout des handlers
     application.add_handler(CommandHandler("history", show_history))
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
@@ -249,7 +243,6 @@ def main() -> None:
         fallbacks=[]
     )
     application.add_handler(conv_handler)
-
     application.run_polling()
 
 if __name__ == '__main__':
