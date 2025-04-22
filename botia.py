@@ -128,23 +128,17 @@ def prepare_data(df, features):
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("👋 Envoie-moi le nom de plusieurs tokens séparés par des espaces ou des virgules (ex: bitcoin, ethereum, dogecoin) :")
+    await update.message.reply_text("👋 Quel(s) token(s) veux-tu analyser ? (ex: bitcoin, ethereum, dogecoin) 📉")
     return ASK_TOKEN
 
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Récupérer tous les tokens envoyés par l'utilisateur
     tokens = [token.strip().lower() for token in update.message.text.split(',')]
-    tokens = [token.strip() for token in tokens if token]
-
-    # Analyser chaque token
     for token in tokens:
         await analyze_and_reply(update, token)
-
     return ConversationHandler.END
 
 async def analyze_and_reply(update: Update, token: str):
     await update.message.reply_text(f"📈 Analyse de {token} en cours...")
-
     try:
         ohlc = get_crypto_data(token, 30)
         if not ohlc:
@@ -168,7 +162,7 @@ async def analyze_and_reply(update: Update, token: str):
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
-            model = Sequential([ 
+            model = Sequential([
                 Input(shape=(X_train.shape[1], X_train.shape[2])),
                 LSTM(64, return_sequences=True),
                 Dropout(0.3),
@@ -222,4 +216,32 @@ async def analyze_and_reply(update: Update, token: str):
 
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
-        await update.message.reply_text(f"❌ Une erreur est
+        await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
+
+async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    history = load_history()
+    if history:
+        messages = [
+            f"🕒 {entry['timestamp']}\n📉 {entry['token'].upper()} | {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
+            f"💰 Prix: {entry['current_price']:.2f}$ | TP: {entry['tp']:.2f}$ | SL: {entry['sl']:.2f}$\n"
+            for entry in history[-5:]
+        ]
+        await update.message.reply_text("\n\n".join(messages))
+    else:
+        await update.message.reply_text("Aucune analyse historique disponible.")
+
+def main() -> None:
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("history", show_history))
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
+        },
+        fallbacks=[]
+    )
+    application.add_handler(conv_handler)
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
