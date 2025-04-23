@@ -12,14 +12,29 @@ import threading  # Ajout de l'importation manquante
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-class HyperliquidAPI:
-    def __init__(self, api_key, api_secret):
-        self.exchange = ccxt.hyperliquid({
-            'apiKey': api_key,
-            'secret': api_secret,
-            'enableRateLimit': True,
-            'options': {'defaultType': 'swap'}
-        })
+from dotenv import load_dotenv
+import os
+
+# Charger les variables d'environnement depuis le fichier .env
+load_dotenv()
+
+# Récupérer les clés API et privée
+api_key = os.getenv('HYPERLIQUID_API_KEY')
+private_key = os.getenv('HYPERLIQUID_PRIVATE_KEY')
+
+# Vérifier que les clés sont chargées correctement
+if not api_key or not private_key:
+    raise ValueError("Les clés API ou privée ne sont pas chargées correctement depuis .env")
+import ccxt
+
+# Assurez-vous que les clés API et privée sont chargées
+exchange = ccxt.hyperliquid({
+    'apiKey': api_key,
+    'privateKey': private_key,  # Utilisation de la clé privée
+    'enableRateLimit': True,
+    'options': {'defaultType': 'swap'}
+})
+
 
     def fetch_symbols(self):
         """Retourne tous les symboles disponibles"""
