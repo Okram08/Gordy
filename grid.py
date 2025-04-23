@@ -32,19 +32,22 @@ class HyperliquidGridTrader:
         self.tg_bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.grid_levels = int(os.getenv("GRID_LEVELS", 5))
-        self.check_interval = int(os.getenv("ANALYSIS_INTERVAL", 3600))
+        self.check_interval = int(os.getenv("ANALYSIS_INTERVAL", 60))  # 1min pour debug
         self.current_token = None
         self.active_orders = []
         self.scheduler = BackgroundScheduler(timezone=utc)
         self.scheduler.start()
 
     def calculate_volatility_score(self, price_data):
-        if len(price_data) < 20:
+        if len(price_data) < 5:  # assoupli pour debug
+            logger.info(f"Pas assez de données pour calculer la volatilité ({len(price_data)} points)")
             return 0
         try:
-            filtered = savgol_filter(price_data, 15, 3)
+            filtered = savgol_filter(price_data, 5, 2)  # fenêtre plus petite pour debug
             residuals = (price_data - filtered) / filtered
-            return np.std(residuals) * 100
+            score = np.std(residuals) * 100
+            logger.info(f"Score volatilité calculé: {score:.4f}")
+            return score
         except Exception as e:
             logger.error(f"Erreur calcul volatilité: {str(e)}")
             return 0
@@ -63,10 +66,14 @@ class HyperliquidGridTrader:
                 timeout=10
             )
             if response.status_code == 200:
-                return [float(entry[4]) for entry in response.json()]
+                prices = [float(entry[4]) for entry in response.json()]
+                logger.info(f"{token}: prix récupérés (premiers 5): {prices[:5]}")
+                return prices
+            else:
+                logger.warning(f"{token}: pas de données de prix (status {response.status_code})")
             return []
         except Exception as e:
-            logger.error(f"Erreur récupération données: {str(e)}")
+            logger.error(f"Erreur récupération données {token}: {str(e)}")
             return []
 
     def evaluate_tokens(self):
@@ -77,15 +84,27 @@ class HyperliquidGridTrader:
                 headers=self.headers,
                 timeout=10
             )
-            tokens = [item["name"] for item in response.json().get("universe", [])]
-            
+            data = response.json()
+            tokens = [item["name"] for item in data.get("universe", [])]
+            logger.info(f"Tokens récupérés: {tokens}")
+            if not tokens:
+                logger.warning("Aucun token trouvé dans la réponse API")
+                return []
             scores = {}
-            for token in tokens[:10]:  # Limite à 10 tokens
+            for token in tokens[:10]:
                 prices = self.fetch_market_data(token)
                 if prices:
-                    scores[token] = self.calculate_volatility_score(prices[-50:])
-            
-            return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3] or []
+                    score = self.calculate_volatility_score(prices[-20:])
+                    scores[token] = score
+                else:
+                    logger.info(f"{token}: pas de prix récupérés")
+            logger.info(f"Scores de volatilité: {scores}")
+            sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            if sorted_scores:
+                logger.info(f"Meilleurs tokens: {sorted_scores[:3]}")
+            else:
+                logger.info("Aucun token n'a passé le filtre de volatilité")
+            return sorted_scores[:3] or []
         except Exception as e:
             logger.error(f"Erreur évaluation tokens: {str(e)}")
             return []
@@ -99,17 +118,19 @@ class HyperliquidGridTrader:
                 "limitPx": round(price, 4),
                 "orderType": "Limit"
             }
-            
+            logger.info(f"Placement d'ordre: {order}")
             response = requests.post(
                 f"{self.base_url}/order",
                 json=order,
                 headers=self.headers,
                 timeout=10
             )
-            
             if response.status_code == 200:
                 self.active_orders.append(response.json()["status"]["orderId"])
+                logger.info(f"Ordre {side} placé pour {token} à {price}")
                 return True
+            else:
+                logger.warning(f"Echec ordre {side} {token} (status {response.status_code})")
             return False
         except Exception as e:
             logger.error(f"Erreur ordre {side}: {str(e)}")
@@ -124,7 +145,9 @@ class HyperliquidGridTrader:
                 timeout=10
             )
             balance = float(response.json()["marginSummary"]["accountValue"])
-            return round(balance * 0.01 / self.grid_levels, 4)
+            size = round(balance * 0.01 / self.grid_levels, 4)
+            logger.info(f"Taille de position calculée: {size}")
+            return size
         except Exception as e:
             logger.error(f"Erreur calcul taille position: {str(e)}")
             return 0.01
@@ -134,17 +157,13 @@ class HyperliquidGridTrader:
             self.cancel_all_orders()
             prices = self.fetch_market_data(token)
             if not prices:
+                logger.warning(f"Pas de prix pour {token}, grille non créée.")
                 return
-                
             price = prices[-1]
             spread = price * 0.005
-            
             for i in range(1, self.grid_levels + 1):
-                if not self.place_order(token, "buy", price - (i * spread)):
-                    logger.warning(f"Échec ordre d'achat niveau {i}")
-                if not self.place_order(token, "sell", price + (i * spread)):
-                    logger.warning(f"Échec ordre de vente niveau {i}")
-            
+                self.place_order(token, "buy", price - (i * spread))
+                self.place_order(token, "sell", price + (i * spread))
             self.current_token = token
             self.send_alert(f"🔄 Grille activée sur {token} | Prix: {price:.4f}")
         except Exception as e:
@@ -167,12 +186,10 @@ class HyperliquidGridTrader:
         try:
             candidates = self.evaluate_tokens()
             if not candidates:
-                logger.info("Aucun token éligible trouvé")
+                logger.info("Aucun token éligible trouvé à ce cycle.")
                 return
-                
             best_token = candidates[0][0]
             logger.info(f"Meilleur token détecté: {best_token}")
-            
             if best_token != self.current_token:
                 self.send_alert(f"🔀 Changement vers {best_token}")
                 self.setup_grid(best_token)
@@ -224,17 +241,12 @@ async def tg_command_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == "__main__":
     trader = HyperliquidGridTrader()
-    
-    # Configuration Telegram
     application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
     application.add_handler(CommandHandler('start', tg_command_start))
     application.add_handler(CommandHandler('stop', tg_command_stop))
-    
-    # Démarrage dans un thread séparé
     import threading
     trading_thread = threading.Thread(target=trader.start_bot, daemon=True)
     trading_thread.start()
-    
     try:
         application.run_polling()
     except KeyboardInterrupt:
