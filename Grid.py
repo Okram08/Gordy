@@ -20,7 +20,7 @@ class HyperliquidAPI:
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
+            'options': {'defaultType': 'spot'}  # ✅ SPOT ici
         })
         self.load_markets()
 
@@ -28,8 +28,10 @@ class HyperliquidAPI:
         self.exchange.load_markets()
         logging.info("Marchés chargés avec succès")
 
-    def get_perpetual_symbols(self):
-        return [symbol for symbol in self.exchange.symbols if 'USD:USD' in symbol]
+    def get_spot_symbols(self):
+        symbols = self.exchange.symbols
+        logging.info(f"🪙 Symboles spot détectés (exemple): {symbols[:10]}")
+        return [s for s in symbols if s.endswith('/USDC')]
 
     def fetch_ohlcv(self, symbol, timeframe='1h', limit=100):
         return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
@@ -69,7 +71,7 @@ class GridTradingBot:
             return float('inf')
 
     def select_best_symbol(self):
-        symbols = self.api.get_perpetual_symbols()
+        symbols = self.api.get_spot_symbols()
         scores = {}
 
         for symbol in symbols:
@@ -92,7 +94,6 @@ class GridTradingBot:
 
     def place_grid_orders(self):
         logging.info("📌 Placement des ordres (simulation pour test)")
-        # Implémentation fictive
         for i in range(self.grid_levels + 1):
             price = self.grid_lower + i * self.grid_size
             logging.info(f"💸 Ordre fictif à {price:.2f} pour {self.order_amount:.4f} unités")
