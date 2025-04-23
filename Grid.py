@@ -126,7 +126,7 @@ if __name__ == "__main__":
         api_secret=os.getenv("HYPERLIQUID_SECRET")
     )
     
-    bot = GridTradingBot(api, capital=1000)
+    bot = GridTradingBot(api, capital=50)
     telegram = TelegramInterface(os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHAT_ID"), bot)
     bot.telegram_bot = telegram
     
