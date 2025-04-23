@@ -2,188 +2,77 @@ import os
 import time
 import asyncio
 import requests
-import numpy as np
-import pytz
 import logging
 from dotenv import load_dotenv
-from scipy.signal import savgol_filter
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 from pytz import utc
 
-# Configuration des logs
+# --- CONFIGURATION ---
+load_dotenv()
+API_URL = "https://api.hyperliquid.xyz"
+HEADERS = {"Content-Type": "application/json"}
+GRID_LEVELS = int(os.getenv("GRID_LEVELS", 5))
+GRID_STEP_PCT = float(os.getenv("GRID_STEP_PCT", 0.005))  # 0.5% par défaut
+CHECK_INTERVAL = int(os.getenv("ANALYSIS_INTERVAL", 60))  # 60s par défaut
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+# --- FONCTIONS API HYPERLIQUID ---
 
-class HyperliquidGridTrader:
+def get_spot_pairs():
+    resp = requests.post(f"{API_URL}/info", json={"type": "spotMeta"}, headers=HEADERS)
+    pairs = resp.json()["universe"]
+    return pairs  # list of dicts: name, index, tokens, etc.
+
+def get_spot_prices():
+    resp = requests.post(f"{API_URL}/info", json={"type": "spotMetaAndAssetCtxs"}, headers=HEADERS)
+    pairs = resp.json()["universe"]
+    prices = {pair["name"]: float(pair["markPx"]) for pair in pairs if "markPx" in pair}
+    return prices
+
+def get_asset_id(spot_index):
+    return 10000 + spot_index
+
+def build_spot_order_payload(asset_id, is_buy, price, size, api_key, signature, nonce):
+    payload = {
+        "action": {
+            "type": "order",
+            "orders": [{
+                "a": asset_id,
+                "b": is_buy,
+                "p": str(price),
+                "s": str(size),
+                "r": False,
+                "t": {"limit": {"tif": "Gtc"}}
+            }]
+        },
+        "nonce": nonce,
+        "signature": signature,      # À générer avec le SDK officiel
+        "X-API-KEY": api_key
+    }
+    return payload
+
+def place_spot_order(payload):
+    resp = requests.post(f"{API_URL}/exchange", json=payload, headers=HEADERS)
+    return resp.json()
+
+# --- BOT GRID TRADING ---
+
+class HyperliquidSpotGridBot:
     def __init__(self):
-        self.base_url = "https://api.hyperliquid.xyz"
-        self.headers = {
-            "Content-Type": "application/json",
-            "X-API-KEY": os.getenv("HYPERLIQUID_API_KEY"),
-            "X-SECRET": os.getenv("HYPERLIQUID_SECRET")
-        }
         self.tg_bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        self.grid_levels = int(os.getenv("GRID_LEVELS", 5))
-        self.check_interval = int(os.getenv("ANALYSIS_INTERVAL", 60))  # 1min pour debug
-        self.current_token = None
-        self.active_orders = []
         self.scheduler = BackgroundScheduler(timezone=utc)
         self.scheduler.start()
-        # Liste des tokens SPOT connus sur Hyperliquid (à compléter selon dispo)
-        self.spot_tokens = ["BTC", "ETH", "SOL", "BNB", "DOGE", "MATIC", "XRP", "LTC"]
-
-    def calculate_volatility_score(self, price_data):
-        if len(price_data) < 5:  # assoupli pour debug
-            logger.info(f"Pas assez de données pour calculer la volatilité ({len(price_data)} points)")
-            return 0
-        try:
-            filtered = savgol_filter(price_data, 5, 2)  # fenêtre plus petite pour debug
-            residuals = (price_data - filtered) / filtered
-            score = np.std(residuals) * 100
-            logger.info(f"Score volatilité calculé: {score:.4f}")
-            return score
-        except Exception as e:
-            logger.error(f"Erreur calcul volatilité: {str(e)}")
-            return 0
-
-    def fetch_market_data(self, token):
-        try:
-            response = requests.post(
-                f"{self.base_url}/history",
-                json={
-                    "type": "spotCandle",
-                    "pair": f"{token}-USD",
-                    "interval": "1h",
-                    "limit": 100
-                },
-                headers=self.headers,
-                timeout=10
-            )
-            if response.status_code == 200:
-                prices = [float(entry[4]) for entry in response.json()]
-                logger.info(f"{token}: prix spot récupérés (premiers 5): {prices[:5]}")
-                return prices
-            else:
-                logger.warning(f"{token}: pas de données de prix spot (status {response.status_code})")
-            return []
-        except Exception as e:
-            logger.error(f"Erreur récupération données {token}: {str(e)}")
-            return []
-
-    def evaluate_tokens(self):
-        # On n'utilise que la liste spot connue pour garantir le fonctionnement
-        tokens = self.spot_tokens
-        logger.info(f"Tokens spot testés: {tokens}")
-        scores = {}
-        for token in tokens:
-            prices = self.fetch_market_data(token)
-            if prices:
-                score = self.calculate_volatility_score(prices[-20:])
-                scores[token] = score
-            else:
-                logger.info(f"{token}: pas de prix spot récupérés")
-        logger.info(f"Scores de volatilité: {scores}")
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        if sorted_scores:
-            logger.info(f"Meilleurs tokens: {sorted_scores[:3]}")
-        else:
-            logger.info("Aucun token n'a passé le filtre de volatilité")
-        return sorted_scores[:3] or []
-
-    def place_order(self, token, side, price):
-        try:
-            order = {
-                "coin": token,
-                "isBuy": side.lower() == "buy",
-                "sz": self.calculate_position_size(),
-                "limitPx": round(price, 4),
-                "orderType": "Limit"
-            }
-            logger.info(f"Placement d'ordre: {order}")
-            response = requests.post(
-                f"{self.base_url}/order",
-                json=order,
-                headers=self.headers,
-                timeout=10
-            )
-            if response.status_code == 200:
-                self.active_orders.append(response.json()["status"]["orderId"])
-                logger.info(f"Ordre {side} placé pour {token} à {price}")
-                return True
-            else:
-                logger.warning(f"Echec ordre {side} {token} (status {response.status_code})")
-            return False
-        except Exception as e:
-            logger.error(f"Erreur ordre {side}: {str(e)}")
-            return False
-
-    def calculate_position_size(self):
-        try:
-            response = requests.post(
-                f"{self.base_url}/user",
-                json={"user": os.getenv("HYPERLIQUID_API_KEY")},
-                headers=self.headers,
-                timeout=10
-            )
-            balance = float(response.json()["marginSummary"]["accountValue"])
-            size = round(balance * 0.01 / self.grid_levels, 4)
-            logger.info(f"Taille de position calculée: {size}")
-            return size
-        except Exception as e:
-            logger.error(f"Erreur calcul taille position: {str(e)}")
-            return 0.01
-
-    def setup_grid(self, token):
-        try:
-            self.cancel_all_orders()
-            prices = self.fetch_market_data(token)
-            if not prices:
-                logger.warning(f"Pas de prix pour {token}, grille non créée.")
-                return
-            price = prices[-1]
-            spread = price * 0.005
-            for i in range(1, self.grid_levels + 1):
-                self.place_order(token, "buy", price - (i * spread))
-                self.place_order(token, "sell", price + (i * spread))
-            self.current_token = token
-            self.send_alert(f"🔄 Grille activée sur {token} | Prix: {price:.4f}")
-        except Exception as e:
-            logger.error(f"Erreur configuration grille: {str(e)}")
-
-    def cancel_all_orders(self):
-        try:
-            for order_id in self.active_orders.copy():
-                response = requests.delete(
-                    f"{self.base_url}/order?orderId={order_id}",
-                    headers=self.headers,
-                    timeout=10
-                )
-                if response.status_code == 200:
-                    self.active_orders.remove(order_id)
-        except Exception as e:
-            logger.error(f"Erreur annulation ordres: {str(e)}")
-
-    def periodic_check(self):
-        try:
-            candidates = self.evaluate_tokens()
-            if not candidates:
-                logger.info("Aucun token éligible trouvé à ce cycle.")
-                return
-            best_token = candidates[0][0]
-            logger.info(f"Meilleur token détecté: {best_token}")
-            if best_token != self.current_token:
-                self.send_alert(f"🔀 Changement vers {best_token}")
-                self.setup_grid(best_token)
-        except Exception as e:
-            logger.error(f"Erreur vérification périodique: {str(e)}")
+        self.selected_pair = None
+        self.grid_orders = []
+        self.running = True
 
     def send_alert(self, message):
         try:
@@ -192,33 +81,95 @@ class HyperliquidGridTrader:
             loop.run_until_complete(
                 self.tg_bot.send_message(
                     chat_id=self.chat_id,
-                    text=f"🚨 HyperGrid Bot:\n{message}"
+                    text=f"🚨 HyperGrid Spot Bot:\n{message}"
                 )
             )
         except Exception as e:
             logger.error(f"Erreur envoi Telegram: {str(e)}")
 
+    def select_best_pair(self):
+        pairs = get_spot_pairs()
+        prices = get_spot_prices()
+        logger.info(f"Paires spot trouvées: {[p['name'] for p in pairs]}")
+        # Critère simple : volume le plus élevé
+        best = None
+        best_vol = 0
+        for pair in pairs:
+            if "dayNtlVlm" in pair and pair["name"] in prices:
+                volume = float(pair["dayNtlVlm"])
+                logger.info(f"{pair['name']} : volume 24h = {volume}, prix = {prices[pair['name']]}")
+                if volume > best_vol:
+                    best = pair
+                    best_vol = volume
+        if best:
+            logger.info(f"Meilleure paire spot sélectionnée: {best['name']}")
+        else:
+            logger.warning("Aucune paire spot trouvée avec volume et prix.")
+        return best, prices.get(best["name"]) if best else None
+
+    def setup_grid_orders(self, pair, price):
+        grid = []
+        for i in range(1, GRID_LEVELS + 1):
+            buy_price = round(price * (1 - GRID_STEP_PCT * i), 6)
+            sell_price = round(price * (1 + GRID_STEP_PCT * i), 6)
+            grid.append(("buy", buy_price))
+            grid.append(("sell", sell_price))
+        logger.info(f"Grille générée pour {pair['name']} : {grid}")
+        return grid
+
+    def periodic_check(self):
+        if not self.running:
+            return
+        pair, price = self.select_best_pair()
+        if not pair or not price:
+            logger.warning("Aucune paire spot sélectionnable à ce cycle.")
+            return
+        if pair != self.selected_pair:
+            self.selected_pair = pair
+            self.send_alert(f"Nouvelle paire spot sélectionnée: {pair['name']} (prix {price})")
+        # Génère la grille
+        self.grid_orders = self.setup_grid_orders(pair, price)
+        self.send_alert(
+            f"Grille SPOT pour {pair['name']} (prix {price})\n" +
+            "\n".join([f"{side.upper()} {p}" for side, p in self.grid_orders])
+        )
+        # --- EXEMPLE (simulation) ---
+        # Pour chaque niveau, affiche le payload à signer pour un ordre
+        api_key = os.getenv("HYPERLIQUID_API_KEY")
+        # TODO: génère signature avec le SDK officiel
+        fake_signature = "signature_a_remplir"
+        nonce = int(time.time() * 1000)
+        asset_id = get_asset_id(pair["index"])
+        size = 1  # À adapter
+        for side, px in self.grid_orders:
+            payload = build_spot_order_payload(
+                asset_id, side == "buy", px, size, api_key, fake_signature, nonce
+            )
+            logger.info(f"Payload à signer pour {side} {px}: {payload}")
+            # Pour passer l'ordre : décommente la ligne suivante après avoir intégré la signature réelle
+            # resp = place_spot_order(payload)
+            # logger.info(f"Réponse Hyperliquid: {resp}")
+
     def start_bot(self):
-        self.send_alert("✅ Bot démarré")
+        self.send_alert("✅ Bot SPOT démarré")
         self.periodic_check()
         self.scheduler.add_job(
             self.periodic_check,
             'interval',
-            seconds=self.check_interval
+            seconds=CHECK_INTERVAL
         )
         logger.info("Bot complètement initialisé")
 
     def graceful_shutdown(self):
         self.send_alert("⏹ Arrêt en cours...")
-        self.cancel_all_orders()
         self.scheduler.shutdown()
         time.sleep(2)
         exit(0)
 
-# Commandes Telegram
+# --- Commandes Telegram ---
 async def tg_command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 HyperGrid Trading Bot Actif\n"
+        "🤖 HyperGrid Spot Bot Actif\n"
         "Commandes disponibles:\n"
         "/status - État actuel\n"
         "/stop - Arrêter le bot"
@@ -229,17 +180,17 @@ async def tg_command_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os._exit(0)
 
 if __name__ == "__main__":
-    trader = HyperliquidGridTrader()
+    bot = HyperliquidSpotGridBot()
     application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
     application.add_handler(CommandHandler('start', tg_command_start))
     application.add_handler(CommandHandler('stop', tg_command_stop))
     import threading
-    trading_thread = threading.Thread(target=trader.start_bot, daemon=True)
+    trading_thread = threading.Thread(target=bot.start_bot, daemon=True)
     trading_thread.start()
     try:
         application.run_polling()
     except KeyboardInterrupt:
-        trader.graceful_shutdown()
+        bot.graceful_shutdown()
     except Exception as e:
         logger.critical(f"ERREUR FATALE: {str(e)}")
-        trader.graceful_shutdown()
+        bot.graceful_shutdown()
