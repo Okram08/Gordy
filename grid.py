@@ -20,7 +20,7 @@ class HyperliquidAPI:
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
+            'options': {'defaultType': 'spot'}  # Changer en spot
         })
         self.load_markets()
 
@@ -29,11 +29,10 @@ class HyperliquidAPI:
         logging.info("Marchés chargés avec succès")
 
     def get_spot_symbols(self):
-        return [s for s in self.exchange.symbols if s.endswith('/USDT')]
+        return [symbol for symbol in self.exchange.symbols if 'USDT' in symbol]  # Filtrage avec 'USDT'
 
     def fetch_ohlcv(self, symbol, timeframe='1h', limit=100):
         return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-
 
 class GridTradingBot:
     def __init__(self, api, capital=1000, grid_levels=10, scan_interval=60):
@@ -49,70 +48,70 @@ class GridTradingBot:
         try:
             ohlcv = self.api.fetch_ohlcv(symbol)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-
+            
+            # Calcul des indicateurs
             df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
             df['bb_upper'] = ta.volatility.BollingerBands(df['close']).bollinger_hband()
             df['bb_lower'] = ta.volatility.BollingerBands(df['close']).bollinger_lband()
             df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx()
-
+            
             last = df.iloc[-1]
-
+            
+            # Score de trading (plus bas = mieux)
             score = 0
-            score += abs(last['rsi'] - 50) * 0.4
-            score += (last['bb_upper'] - last['bb_lower']) / last['close'] * 100 * 0.3
-            score += (30 - min(last['adx'], 30)) * 0.3
-
+            score += abs(last['rsi'] - 50) * 0.4  # Neutralité RSI
+            score += (last['bb_upper'] - last['bb_lower']) / last['close'] * 100 * 0.3  # Volatilité
+            score += (30 - min(last['adx'], 30)) * 0.3  # Faible tendance
+            
             return score
-
+            
         except Exception as e:
             logging.error(f"Erreur analyse {symbol}: {e}")
             return float('inf')
 
-def select_best_symbol(self):
-    symbols = self.api.get_spot_symbols()
-    scores = {}
+    def select_best_symbol(self):
+        symbols = self.api.get_spot_symbols()
+        scores = {}
 
-    for symbol in symbols:
-        try:
-            ticker = self.api.exchange.fetch_ticker(symbol)
-            volume = ticker.get('quoteVolume', 0)  # Récupère le volume en USDT
+        for symbol in symbols:
+            try:
+                ticker = self.api.exchange.fetch_ticker(symbol)
+                volume = ticker.get('quoteVolume', 0)  # Récupère le volume en USDT
 
-            # Log pour vérifier les volumes
-            logging.info(f"📊 Volume de {symbol}: {volume:.0f} USD")
+                # Log pour vérifier les volumes
+                logging.info(f"📊 Volume de {symbol}: {volume:.0f} USD")
 
-            # Filtrage basé sur le volume
-            if volume < 1_000_000:
-                logging.info(f"⛔ {symbol} ignoré (volume trop faible: {volume:.0f})")
-                continue
+                # Filtrage basé sur le volume
+                if volume < 1_000_000:
+                    logging.info(f"⛔ {symbol} ignoré (volume trop faible: {volume:.0f})")
+                    continue
 
-            score = self.analyze_symbol(symbol)
-            scores[symbol] = score
-            logging.info(f"✅ {symbol} | Volume: {volume:.0f} | Score: {score:.2f}")
-            time.sleep(0.5)
+                score = self.analyze_symbol(symbol)
+                scores[symbol] = score
+                logging.info(f"✅ {symbol} | Volume: {volume:.0f} | Score: {score:.2f}")
+                time.sleep(0.5)
 
-        except Exception as e:
-            logging.warning(f"⚠️ Erreur ticker {symbol}: {e}")
+            except Exception as e:
+                logging.warning(f"⚠️ Erreur ticker {symbol}: {e}")
 
-    return min(scores, key=scores.get) if scores else None
-
+        return min(scores, key=scores.get) if scores else None
 
     def calculate_grid(self, symbol):
         ticker = self.api.exchange.fetch_ticker(symbol)
         price = ticker['last']
         volatility = (ticker['high'] - ticker['low']) / ticker['low']
-
+        
+        # Ajustement dynamique de la grille
         self.grid_lower = price * (1 - volatility)
         self.grid_upper = price * (1 + volatility)
         self.grid_size = (self.grid_upper - self.grid_lower) / self.grid_levels
         self.order_amount = (self.capital * 0.95) / (self.grid_levels * price)
 
     def place_grid_orders(self):
-        logging.info("📌 Placement des ordres (simulation)")
-        for i in range(self.grid_levels + 1):
-            price = self.grid_lower + i * self.grid_size
-            logging.info(f"💸 Ordre fictif à {price:.2f} pour {self.order_amount:.4f} unités")
+        # Placer des ordres de grid (à implémenter selon ta stratégie)
+        pass
 
-def run_strategy(self):
+    def run_strategy(self):
         """ Méthode principale qui fait tourner la stratégie de grid trading. """
         while self.running:
             try:
@@ -136,38 +135,26 @@ def run_strategy(self):
                 logging.error(f"Erreur stratégie: {e}")
                 time.sleep(60)
 
-
 class TelegramInterface:
     def __init__(self, token, chat_id, bot_logic):
-        self.token = token
+        self.bot = Bot(token)
         self.chat_id = chat_id
         self.bot_logic = bot_logic
-        self.bot = Bot(token=self.token)
-        self.updater = Updater(token=self.token, use_context=True)
-        dp = self.updater.dispatcher
-        dp.add_handler(CommandHandler("start", self.start_command))
-
-    def start_command(self, update, context):
-        context.bot.send_message(chat_id=update.effective_chat.id, text="🤖 Bot actif !")
-
-    def send_message(self, message):
-        self.bot.send_message(chat_id=self.chat_id, text=message)
 
     def start(self):
-        logging.info("📬 Interface Telegram démarrée")
-        self.updater.start_polling()
-
+        """ Démarrer l'interface Telegram pour le bot. """
+        self.bot.send_message(self.chat_id, "📬 Interface Telegram démarrée")
+        self.bot_logic.running = True
+        self.bot_logic.run_strategy()
 
 if __name__ == "__main__":
     api = HyperliquidAPI(
         api_key=os.getenv("HYPERLIQUID_API_KEY"),
         api_secret=os.getenv("HYPERLIQUID_SECRET")
     )
-
-    bot = GridTradingBot(api, capital=50, scan_interval=60)
+    
+    bot = GridTradingBot(api, capital=1000)
     telegram = TelegramInterface(os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHAT_ID"), bot)
     bot.telegram_bot = telegram
-
+    
     threading.Thread(target=telegram.start).start()
-    logging.info("Scheduler started")
-    bot.run_strategy()
