@@ -1,213 +1,116 @@
-# hypergrid_bot.py
 import os
 import time
-import requests
+import ccxt
 import numpy as np
 from dotenv import load_dotenv
-from scipy.signal import savgol_filter
-from telegram import Bot, Update
-from telegram.ext import Updater, CommandHandler
-from apscheduler.schedulers.background import BackgroundScheduler
+from telegram import Update
+from telegram.ext import Application, CommandHandler
 
+# Charger les variables d'environnement
 load_dotenv()
 
-class HyperliquidGridTrader:
-    def __init__(self):
-        # Configuration initiale
-        self.base_url = "https://api.hyperliquid.xyz"
-        self.headers = {
-            "Content-Type": "application/json",
-            "X-API-KEY": os.getenv("HYPERLIQUID_API_KEY"),
-            "X-SECRET": os.getenv("HYPERLIQUID_SECRET")
-        }
-        
-        # Configuration Telegram
-        self.tg_bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        
-        # Paramètres de trading
-        self.grid_levels = int(os.getenv("GRID_LEVELS", 5))
-        self.check_interval = int(os.getenv("ANALYSIS_INTERVAL", 3600))
-        self.current_token = None
-        self.active_orders = []
-        
-        # Initialisation du scheduler
-        self.scheduler = BackgroundScheduler()
-        self.scheduler.start()
+# Clés d'API
+api_key = os.getenv('HYPERLIQUID_API_KEY')
+api_secret = os.getenv('HYPERLIQUID_API_SECRET')
+private_key = os.getenv('HYPERLIQUID_PRIVATE_KEY')
+telegram_api_key = os.getenv('TELEGRAM_API_KEY')
 
-    # Méthodes d'analyse technique
-    def calculate_volatility_score(self, price_data):
-        """Calcule le score de volatilité avec lissage Savitzky-Golay"""
-        try:
-            filtered = savgol_filter(price_data, 15, 3)
-            residuals = (price_data - filtered) / filtered
-            return np.std(residuals) * 100
-        except Exception as e:
-            self.send_alert(f"Erreur analyse volatilité : {str(e)}")
-            return 0
+# Initialiser la connexion à Hyperliquid (ou autre API d'échange)
+exchange = ccxt.hyperliquid({
+    'apiKey': api_key,
+    'secret': api_secret,
+    'privateKey': private_key
+})
 
-    def fetch_market_data(self, token):
-        """Récupère les données historiques de prix"""
-        try:
-            response = requests.post(
-                f"{self.base_url}/history",
-                json={
-                    "type": "candle",
-                    "coin": token,
-                    "interval": "1h",
-                    "limit": 100
-                },
-                headers=self.headers
-            )
-            return [float(entry[4]) for entry in response.json()]  # Prix de clôture
-        except Exception as e:
-            self.send_alert(f"Erreur récupération données {token} : {str(e)}")
-            return []
+# Fonction pour calculer le RSI (Relative Strength Index) manuellement
+def calculate_rsi(prices, period=14):
+    gains = []
+    losses = []
 
-    # Sélection de tokens
-    def evaluate_tokens(self):
-        """Évalue tous les tokens disponibles"""
-        try:
-            response = requests.post(
-                f"{self.base_url}/info",
-                json={"type": "meta"},
-                headers=self.headers
-            )
-            tokens = [item["name"] for item in response.json()["universe"]]
-            
-            scores = {}
-            for token in tokens:
-                prices = self.fetch_market_data(token)
-                if len(prices) > 20:  # Minimum 20 points de données
-                    scores[token] = self.calculate_volatility_score(prices[-50:])
-            
-            return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:5]
-        except Exception as e:
-            self.send_alert(f"Erreur évaluation tokens : {str(e)}")
-            return []
+    # Calcul des gains et pertes
+    for i in range(1, len(prices)):
+        change = prices[i] - prices[i - 1]
+        if change >= 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            losses.append(-change)
+            gains.append(0)
 
-    # Méthodes de trading
-    def place_order(self, token, side, price):
-        """Place un ordre sur Hyperliquid"""
-        order = {
-            "coin": token,
-            "isBuy": side.lower() == "buy",
-            "sz": self.calculate_position_size(token),
-            "limitPx": round(price, 4),
-            "orderType": "Limit"
-        }
-        
-        try:
-            response = requests.post(
-                f"{self.base_url}/order",
-                json=order,
-                headers=self.headers
-            )
-            if response.status_code == 200:
-                self.active_orders.append(response.json()["status"]["orderId"])
-                return True
-            return False
-        except Exception as e:
-            self.send_alert(f"Erreur ordre {side} {token} : {str(e)}")
-            return False
+    # Calcul des moyennes des gains et pertes
+    avg_gain = np.mean(gains[-period:])
+    avg_loss = np.mean(losses[-period:])
 
-    def calculate_position_size(self, token):
-        """Calcule la taille de position selon le capital disponible"""
-        try:
-            response = requests.post(
-                f"{self.base_url}/user",
-                json={"user": os.getenv("HYPERLIQUID_API_KEY")},
-                headers=self.headers
-            )
-            balance = float(response.json()["marginSummary"]["accountValue"])
-            return round(balance * 0.01, 4)  # 1% du capital par orddre
-        except:
-            return 0.01  # Fallback
+    if avg_loss == 0:
+        return 100  # Eviter la division par zéro si aucune perte
 
-    # Gestion du grid
-    def setup_grid(self, token):
-        """Initialise la grille de trading"""
-        try:
-            price = self.fetch_market_data(token)[-1]
-            spread = price * 0.005  # 0.5% entre les niveaux
-            
-            # Annule les anciens ordres
-            self.cancel_all_orders()
-            
-            # Place les ordres de grille
-            for i in range(1, self.grid_levels + 1):
-                self.place_order(token, "buy", price - (i * spread))
-                self.place_order(token, "sell", price + (i * spread))
-            
-            self.current_token = token
-            self.send_alert(f"🔄 Grille initialisée sur {token} | Prix: {price:.4f}")
-        except Exception as e:
-            self.send_alert(f"Erreur initialisation grille : {str(e)}")
+    # Calcul du RSI
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-    def cancel_all_orders(self):
-        """Annule tous les ordres en cours"""
-        try:
-            for order_id in self.active_orders:
-                requests.delete(
-                    f"{self.base_url}/order?orderId={order_id}",
-                    headers=self.headers
-                )
-            self.active_orders = []
-        except Exception as e:
-            self.send_alert(f"Erreur annulation ordres : {str(e)}")
+# Fonction d'analyse technique (RSI)
+def analyse_token(prices):
+    rsi = calculate_rsi(prices)
+    if rsi > 70:
+        return "suracheté"
+    elif rsi < 30:
+        return "sous-évalué"
+    else:
+        return "neutre"
 
-    # Surveillance périodique
-    def periodic_check(self):
-        """Vérification régulière du meilleur token"""
-        try:
-            best_token = self.evaluate_tokens()[0][0]
-            
-            if best_token != self.current_token:
-                self.send_alert(f"🔀 Changement de token : {self.current_token} → {best_token}")
-                self.setup_grid(best_token)
-        except Exception as e:
-            self.send_alert(f"Erreur vérification périodique : {str(e)}")
+# Fonction pour le Grid Trading
+def grid_trading(pair, buy_price, sell_price, grid_size):
+    for i in range(grid_size):
+        buy_order = exchange.create_limit_buy_order(pair, 1, buy_price - (i * 0.01))
+        sell_order = exchange.create_limit_sell_order(pair, 1, sell_price + (i * 0.01))
+        print(f'Ordre d\'achat: {buy_order}')
+        print(f'Ordre de vente: {sell_order}')
 
-    # Interface Telegram
-    def send_alert(self, message):
-        """Envoie une notification Telegram"""
-        try:
-            self.tg_bot.send_message(
-                chat_id=self.chat_id,
-                text=f"🚨 HyperGrid Bot:\n{message}"
-            )
-        except Exception as e:
-            print(f"Erreur envoi Telegram: {str(e)}")
+# Fonction pour démarrer le bot Telegram
+def start(update: Update, context):
+    update.message.reply_text('Salut, je suis ton bot de trading Grid!')
 
-    def start_bot(self):
-        """Lance le bot"""
-        self.send_alert("✅ Bot démarré")
-        self.periodic_check()
-        self.scheduler.add_job(
-            self.periodic_check,
-            'interval',
-            seconds=self.check_interval
-        )
+def stop(update: Update, context):
+    update.message.reply_text('Je m\'arrête, à bientôt!')
 
-# Commandes Telegram
-def tg_command_start(update: Update, context):
-    context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="Bot HyperGrid Trading actif!\nCommandes disponibles:\n/status - État actuel\n/stop - Arrêter le bot"
-    )
+# Lancer le bot Telegram
+def main():
+    # Création de l'instance de l'Application et du Bot
+    application = Application.builder().token(telegram_api_key).build()
 
-if __name__ == "__main__":
-    # Initialisation
-    trader = HyperliquidGridTrader()
-    
-    # Configuration Telegram
-    updater = Updater(token=os.getenv("TELEGRAM_TOKEN"), use_context=True)
-    updater.dispatcher.add_handler(CommandHandler('start', tg_command_start))
-    updater.start_polling()
-    
-    # Démarrage du trading
-    trader.start_bot()
-    
-    # Maintien en vie
+    # Ajout des handlers pour les commandes
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stop", stop))
+
+    # Lancer le bot
+    application.run_polling()
+
+# Fonction pour vérifier et mettre à jour les tokens disponibles à intervalles réguliers
+def check_and_update_tokens():
     while True:
-        time.sleep(1)
+        # Récupérer les tokens disponibles
+        markets = exchange.load_markets()
+        for token in markets:
+            try:
+                prices = exchange.fetch_ohlcv(token, timeframe='1h')  # Récupérer les prix sur 1h
+                prices = [price[4] for price in prices]  # Extraire les prix de clôture
+                status = analyse_token(prices)
+                if status == "sous-évalué":
+                    # Commencer à trader sur ce token
+                    grid_trading(token, prices[-1] * 0.98, prices[-1] * 1.02, 5)
+            except Exception as e:
+                print(f"Erreur lors de l'analyse du token {token}: {e}")
+
+        # Attendre 10 minutes avant de vérifier à nouveau
+        time.sleep(600)
+
+# Lancer le bot et la mise à jour des tokens
+if __name__ == '__main__':
+    # Lancer le bot Telegram dans un thread séparé
+    from threading import Thread
+    telegram_thread = Thread(target=main)
+    telegram_thread.start()
+
+    # Lancer la vérification et mise à jour des tokens
+    check_and_update_tokens()
