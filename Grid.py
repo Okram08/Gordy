@@ -6,6 +6,7 @@ import ccxt
 from telegram import Bot
 from telegram.ext import Updater, CommandHandler
 from dotenv import load_dotenv
+import threading  # Ajout de l'importation manquante
 
 # Configuration initiale
 load_dotenv()
