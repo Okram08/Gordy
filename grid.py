@@ -25,16 +25,26 @@ logger = logging.getLogger(__name__)
 
 # --- FONCTIONS API HYPERLIQUID ---
 
-def get_spot_pairs():
-    resp = requests.post(f"{API_URL}/info", json={"type": "spotMeta"}, headers=HEADERS)
-    pairs = resp.json()["universe"]
-    return pairs  # list of dicts: name, index, tokens, etc.
-
-def get_spot_prices():
+def get_spot_meta_and_prices():
     resp = requests.post(f"{API_URL}/info", json={"type": "spotMetaAndAssetCtxs"}, headers=HEADERS)
-    pairs = resp.json()["universe"]
-    prices = {pair["name"]: float(pair["markPx"]) for pair in pairs if "markPx" in pair}
-    return prices
+    data = resp.json()
+    spot_meta = data[0]["universe"]  # Liste des paires spot
+    spot_ctxs = data[1]              # Liste des contextes, avec prix
+    # Associe chaque paire à son contexte (prix, volume, etc.)
+    meta_by_index = {pair["index"]: pair for pair in spot_meta}
+    ctx_by_index = {ctx["a"]: ctx for ctx in spot_ctxs}
+    pairs = []
+    for idx, pair in meta_by_index.items():
+        ctx = ctx_by_index.get(idx)
+        if ctx and "markPx" in ctx:
+            pair_info = {
+                "name": pair["name"],
+                "index": idx,
+                "price": float(ctx["markPx"]),
+                "volume": float(ctx.get("dayNtlVlm", 0))
+            }
+            pairs.append(pair_info)
+    return pairs
 
 def get_asset_id(spot_index):
     return 10000 + spot_index
@@ -88,26 +98,24 @@ class HyperliquidSpotGridBot:
             logger.error(f"Erreur envoi Telegram: {str(e)}")
 
     def select_best_pair(self):
-        pairs = get_spot_pairs()
-        prices = get_spot_prices()
+        pairs = get_spot_meta_and_prices()
         logger.info(f"Paires spot trouvées: {[p['name'] for p in pairs]}")
         # Critère simple : volume le plus élevé
         best = None
         best_vol = 0
         for pair in pairs:
-            if "dayNtlVlm" in pair and pair["name"] in prices:
-                volume = float(pair["dayNtlVlm"])
-                logger.info(f"{pair['name']} : volume 24h = {volume}, prix = {prices[pair['name']]}")
-                if volume > best_vol:
-                    best = pair
-                    best_vol = volume
+            logger.info(f"{pair['name']} : volume 24h = {pair['volume']}, prix = {pair['price']}")
+            if pair["volume"] > best_vol:
+                best = pair
+                best_vol = pair["volume"]
         if best:
             logger.info(f"Meilleure paire spot sélectionnée: {best['name']}")
         else:
             logger.warning("Aucune paire spot trouvée avec volume et prix.")
-        return best, prices.get(best["name"]) if best else None
+        return best
 
-    def setup_grid_orders(self, pair, price):
+    def setup_grid_orders(self, pair):
+        price = pair["price"]
         grid = []
         for i in range(1, GRID_LEVELS + 1):
             buy_price = round(price * (1 - GRID_STEP_PCT * i), 6)
@@ -120,17 +128,17 @@ class HyperliquidSpotGridBot:
     def periodic_check(self):
         if not self.running:
             return
-        pair, price = self.select_best_pair()
-        if not pair or not price:
+        pair = self.select_best_pair()
+        if not pair:
             logger.warning("Aucune paire spot sélectionnable à ce cycle.")
             return
-        if pair != self.selected_pair:
+        if not self.selected_pair or pair["name"] != self.selected_pair["name"]:
             self.selected_pair = pair
-            self.send_alert(f"Nouvelle paire spot sélectionnée: {pair['name']} (prix {price})")
+            self.send_alert(f"Nouvelle paire spot sélectionnée: {pair['name']} (prix {pair['price']})")
         # Génère la grille
-        self.grid_orders = self.setup_grid_orders(pair, price)
+        self.grid_orders = self.setup_grid_orders(pair)
         self.send_alert(
-            f"Grille SPOT pour {pair['name']} (prix {price})\n" +
+            f"Grille SPOT pour {pair['name']} (prix {pair['price']})\n" +
             "\n".join([f"{side.upper()} {p}" for side, p in self.grid_orders])
         )
         # --- EXEMPLE (simulation) ---
