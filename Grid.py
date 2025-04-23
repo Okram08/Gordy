@@ -117,10 +117,17 @@ class GridTradingBot:
 
     # Méthodes restantes (place_grid_orders, gestion risques, etc.)...
 
-class TelegramInterface:
-    # Implementation similaire à précédemment...
+class TelegramInterface:  # Ligne 120
+    def __init__(self, token, chat_id, bot_logic):
+        # ... code existant ...
+    
+    # Ajoutez cette méthode manquante avec une indentation correcte
+    def start(self):
+        self.updater.start_polling()
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # Ligne 123
+    # ... reste du code ...
+
     api = HyperliquidAPI(
         api_key=os.getenv("HYPERLIQUID_API_KEY"),
         api_secret=os.getenv("HYPERLIQUID_SECRET")
