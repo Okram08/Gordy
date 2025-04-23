@@ -68,28 +68,33 @@ class GridTradingBot:
             logging.error(f"Erreur analyse {symbol}: {e}")
             return float('inf')
 
-    def select_best_symbol(self):
-        symbols = self.api.get_spot_symbols()
-        scores = {}
+def select_best_symbol(self):
+    symbols = self.api.get_spot_symbols()
+    scores = {}
 
-        for symbol in symbols:
-            try:
-                ticker = self.api.exchange.fetch_ticker(symbol)
-                volume = ticker.get('quoteVolume', 0)
+    for symbol in symbols:
+        try:
+            ticker = self.api.exchange.fetch_ticker(symbol)
+            volume = ticker.get('quoteVolume', 0)  # Récupère le volume en USDT
 
-                if volume < 1_000_000:
-                    logging.info(f"⛔ {symbol} ignoré (volume trop faible: {volume:.0f})")
-                    continue
+            # Log pour vérifier les volumes
+            logging.info(f"📊 Volume de {symbol}: {volume:.0f} USD")
 
-                score = self.analyze_symbol(symbol)
-                scores[symbol] = score
-                logging.info(f"✅ {symbol} | Volume: {volume:.0f} | Score: {score:.2f}")
-                time.sleep(0.5)
+            # Filtrage basé sur le volume
+            if volume < 1_000_000:
+                logging.info(f"⛔ {symbol} ignoré (volume trop faible: {volume:.0f})")
+                continue
 
-            except Exception as e:
-                logging.warning(f"⚠️ Erreur ticker {symbol}: {e}")
+            score = self.analyze_symbol(symbol)
+            scores[symbol] = score
+            logging.info(f"✅ {symbol} | Volume: {volume:.0f} | Score: {score:.2f}")
+            time.sleep(0.5)
 
-        return min(scores, key=scores.get) if scores else None
+        except Exception as e:
+            logging.warning(f"⚠️ Erreur ticker {symbol}: {e}")
+
+    return min(scores, key=scores.get) if scores else None
+
 
     def calculate_grid(self, symbol):
         ticker = self.api.exchange.fetch_ticker(symbol)
