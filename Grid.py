@@ -1,15 +1,11 @@
 import os
-import pandas as pd
-import numpy as np
 import time
 import logging
-import threading
 from datetime import datetime
+import ccxt
 from telegram import Bot
 from telegram.ext import Updater, CommandHandler
 from dotenv import load_dotenv
-import ta
-import ccxt
 
 # Configuration initiale
 load_dotenv()
@@ -24,33 +20,30 @@ class HyperliquidAPI:
             'options': {'defaultType': 'swap'}
         })
 
-    def fetch_ohlcv(self, symbol, timeframe='1h', limit=500):
-        return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    def fetch_symbols(self):
+        """Retourne tous les symboles disponibles"""
+        try:
+            markets = self.exchange.load_markets()
+            symbols = [market for market in markets if 'USDT' in market]
+            logging.info(f"Symboles récupérés : {symbols}")
+            return symbols
+        except Exception as e:
+            logging.error(f"Erreur lors de la récupération des symboles : {e}")
+            return []
 
     def fetch_ticker(self, symbol):
         return self.exchange.fetch_ticker(symbol)
 
-    def fetch_open_orders(self, symbol):
-        return self.exchange.fetch_open_orders(symbol)
-
-    def cancel_order(self, order_id, symbol):
-        return self.exchange.cancel_order(order_id, symbol)
-
     def create_limit_buy_order(self, symbol, amount, price):
+        """Créer un ordre limite d'achat"""
         return self.exchange.create_order(symbol, 'limit', 'buy', amount, price, params={'timeInForce': 'PostOnly'})
 
     def create_limit_sell_order(self, symbol, amount, price):
+        """Créer un ordre limite de vente"""
         return self.exchange.create_order(symbol, 'limit', 'sell', amount, price, params={'timeInForce': 'PostOnly'})
-
-    def fetch_closed_orders(self, symbol, since):
-        return self.exchange.fetch_closed_orders(symbol, since=since)
 
     def milliseconds(self):
         return self.exchange.milliseconds()
-
-    def get_all_symbols(self):
-        markets = self.exchange.load_markets()
-        return [symbol for symbol in markets if ":USD" in symbol or "/USD" in symbol]
 
 class GridTradingBot:
     def __init__(self, exchange, capital, grid_levels, dry_run, scan_interval):
@@ -61,50 +54,45 @@ class GridTradingBot:
         self.scan_interval = scan_interval
 
         self.running = True
+        self.symbols = []
         self.current_symbol = None
-        self.total_buy_cost = 0
-        self.total_sell_revenue = 0
-        self.total_fees = 0
+        self.order_amount = None
         self.grid_lower = None
         self.grid_upper = None
-        self.order_amount = None
-        self.telegram_bot = None
 
-    def is_good_for_grid(self, ohlcv):
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['returns'] = df['close'].pct_change()
-        volatility = df['returns'].rolling(window=20).std().iloc[-1]
-        trend = df['close'].iloc[-1] - df['close'].iloc[0]
-        return 0.01 < volatility < 0.05 and abs(trend / df['close'].iloc[0]) < 0.05
+    def fetch_and_filter_symbols(self):
+        """Récupère et filtre les symboles disponibles"""
+        self.symbols = self.exchange.fetch_symbols()
+        logging.info(f"Analyse de {len(self.symbols)} symboles...")
+        if not self.symbols:
+            logging.warning("Aucun symbole valide trouvé pour l'analyse.")
 
+    def place_orders(self, symbol, price):
+        """Placer des ordres d'achat et de vente autour de la grille"""
+        grid_range = 0.02 * price
+        self.grid_lower = price - grid_range
+        self.grid_upper = price + grid_range
+        order_amount = self.capital / self.grid_levels / price  # Calcul de la taille des ordres
+
+        logging.info(f"Placer des ordres pour {symbol} à {price:.2f}:")
+        logging.info(f"Ordre d'achat à {self.grid_lower:.2f}, Ordre de vente à {self.grid_upper:.2f}")
+        
+        if not self.dry_run:
+            self.exchange.create_limit_buy_order(symbol, order_amount, self.grid_lower)
+            self.exchange.create_limit_sell_order(symbol, order_amount, self.grid_upper)
+        
     def run(self):
-        all_symbols = self.exchange.get_all_symbols()
-        logging.info(f"Analyse de {len(all_symbols)} symboles...")
-
+        self.fetch_and_filter_symbols()
         while self.running:
-            for symbol in all_symbols:
-                try:
-                    ohlcv = self.exchange.fetch_ohlcv(symbol)
-                    if not self.is_good_for_grid(ohlcv):
-                        logging.info(f"{symbol} ignoré — pas adapté au grid trading")
-                        continue
+            for symbol in self.symbols:
+                self.current_symbol = symbol
+                ticker = self.exchange.fetch_ticker(symbol)
+                price = ticker['last']
+                logging.info(f"Vérification du symbole {symbol} à {price:.2f}")
 
-                    self.current_symbol = symbol
-                    ticker = self.exchange.fetch_ticker(symbol)
-                    price = ticker['last']
-                    logging.info(f"Trading sur {symbol} à {price:.2f}")
+                # Créer et placer les ordres
+                self.place_orders(symbol, price)
 
-                    grid_range = 0.02 * price
-                    self.grid_lower = price - grid_range
-                    self.grid_upper = price + grid_range
-                    self.order_amount = self.capital / self.grid_levels / price
-                    self.total_buy_cost += self.order_amount * price * 0.998
-                    self.total_sell_revenue += self.order_amount * price * 1.002
-                    self.total_fees += self.order_amount * price * 0.004
-
-                    logging.info(f"Grille établie pour {symbol}: {self.grid_lower:.2f} à {self.grid_upper:.2f}")
-                except Exception as e:
-                    logging.warning(f"Erreur pour {symbol}: {e}")
                 time.sleep(self.scan_interval)
 
 class TelegramInterface:
@@ -133,7 +121,6 @@ class TelegramInterface:
             f"📊 Status Bot\n"
             f"Actif: {self.bot_logic.current_symbol or 'Aucun'}\n"
             f"Capital: {self.bot_logic.capital:.2f} USDT\n"
-            f"Performance: +{(self.bot_logic.total_sell_revenue - self.bot_logic.total_buy_cost - self.bot_logic.total_fees):.2f} USDT\n"
             f"Etat: {etat}"
         )
         self.send_message(msg)
