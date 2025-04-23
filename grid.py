@@ -4,13 +4,12 @@ import logging
 import threading
 import ccxt
 import pandas as pd
-import numpy as np
 import ta
 from telegram import Bot
 from telegram.ext import Updater, CommandHandler
 from dotenv import load_dotenv
 
-# Configuration initiale
+# Config de base
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -29,16 +28,14 @@ class HyperliquidAPI:
         logging.info("Marchés chargés avec succès")
 
     def get_spot_symbols(self):
-        symbols = self.exchange.symbols
-        logging.info(f"🪙 Symboles spot détectés (exemple): {symbols[:10]}")
-        return [s for s in symbols if s.endswith('/USDC')]
+        return [s for s in self.exchange.symbols if s.endswith('/USDT')]
 
     def fetch_ohlcv(self, symbol, timeframe='1h', limit=100):
         return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
 
 class GridTradingBot:
-    def __init__(self, api, capital=1000, grid_levels=10, scan_interval=30):
+    def __init__(self, api, capital=1000, grid_levels=10, scan_interval=60):
         self.api = api
         self.capital = capital
         self.grid_levels = grid_levels
@@ -53,8 +50,9 @@ class GridTradingBot:
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
             df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-            df['bb_upper'] = ta.volatility.BollingerBands(df['close']).bollinger_hband()
-            df['bb_lower'] = ta.volatility.BollingerBands(df['close']).bollinger_lband()
+            bb = ta.volatility.BollingerBands(df['close'])
+            df['bb_upper'] = bb.bollinger_hband()
+            df['bb_lower'] = bb.bollinger_lband()
             df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx()
 
             last = df.iloc[-1]
@@ -70,29 +68,28 @@ class GridTradingBot:
             logging.error(f"Erreur analyse {symbol}: {e}")
             return float('inf')
 
-def select_best_symbol(self):
-    symbols = self.api.get_spot_symbols()
-    scores = {}
+    def select_best_symbol(self):
+        symbols = self.api.get_spot_symbols()
+        scores = {}
 
-    for symbol in symbols:
-        try:
-            ticker = self.api.exchange.fetch_ticker(symbol)
-            volume = ticker['quoteVolume']  # en USDT ou équivalent
+        for symbol in symbols:
+            try:
+                ticker = self.api.exchange.fetch_ticker(symbol)
+                volume = ticker.get('quoteVolume', 0)
 
-            if volume < 1_000_000:
-                logging.info(f"⛔ {symbol} ignoré (volume trop faible: {volume:.0f})")
-                continue
+                if volume < 1_000_000:
+                    logging.info(f"⛔ {symbol} ignoré (volume trop faible: {volume:.0f})")
+                    continue
 
-            score = self.analyze_symbol(symbol)
-            scores[symbol] = score
-            logging.info(f"✅ {symbol} | Volume: {volume:.0f} | Score: {score:.2f}")
-            time.sleep(0.5)
+                score = self.analyze_symbol(symbol)
+                scores[symbol] = score
+                logging.info(f"✅ {symbol} | Volume: {volume:.0f} | Score: {score:.2f}")
+                time.sleep(0.5)
 
-        except Exception as e:
-            logging.warning(f"⚠️ Erreur ticker {symbol}: {e}")
+            except Exception as e:
+                logging.warning(f"⚠️ Erreur ticker {symbol}: {e}")
 
-    return min(scores, key=scores.get) if scores else None
-
+        return min(scores, key=scores.get) if scores else None
 
     def calculate_grid(self, symbol):
         ticker = self.api.exchange.fetch_ticker(symbol)
@@ -105,12 +102,13 @@ def select_best_symbol(self):
         self.order_amount = (self.capital * 0.95) / (self.grid_levels * price)
 
     def place_grid_orders(self):
-        logging.info("📌 Placement des ordres (simulation pour test)")
+        logging.info("📌 Placement des ordres fictifs (simulation)")
         for i in range(self.grid_levels + 1):
             price = self.grid_lower + i * self.grid_size
-            logging.info(f"💸 Ordre fictif à {price:.2f} pour {self.order_amount:.4f} unités")
+            logging.info(f"💸 Ordre fictif à {price:.4f} pour {self.order_amount:.4f} unités")
 
     def run_strategy(self):
+        logging.info("Scheduler started")
         while self.running:
             try:
                 logging.info("🔍 Sélection du meilleur symbole...")
@@ -121,6 +119,7 @@ def select_best_symbol(self):
                     self.current_symbol = best_symbol
                     self.calculate_grid(best_symbol)
                     self.place_grid_orders()
+
                     if self.telegram_bot:
                         self.telegram_bot.send_message(
                             f"🔄 Nouveau symbole sélectionné: {best_symbol}\n"
@@ -163,7 +162,7 @@ if __name__ == "__main__":
         api_secret=os.getenv("HYPERLIQUID_SECRET")
     )
 
-    bot = GridTradingBot(api, capital=50, scan_interval=30)
+    bot = GridTradingBot(api, capital=100, scan_interval=60)
     telegram = TelegramInterface(os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHAT_ID"), bot)
     bot.telegram_bot = telegram
 
