@@ -4,12 +4,13 @@ import logging
 import threading
 import ccxt
 import pandas as pd
+import numpy as np
 import ta
 from telegram import Bot
 from telegram.ext import Updater, CommandHandler
 from dotenv import load_dotenv
 
-# Config de base
+# Configuration initiale
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -19,7 +20,7 @@ class HyperliquidAPI:
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}  # ✅ SPOT ici
+            'options': {'defaultType': 'spot'}
         })
         self.load_markets()
 
@@ -50,9 +51,8 @@ class GridTradingBot:
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
             df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-            bb = ta.volatility.BollingerBands(df['close'])
-            df['bb_upper'] = bb.bollinger_hband()
-            df['bb_lower'] = bb.bollinger_lband()
+            df['bb_upper'] = ta.volatility.BollingerBands(df['close']).bollinger_hband()
+            df['bb_lower'] = ta.volatility.BollingerBands(df['close']).bollinger_lband()
             df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx()
 
             last = df.iloc[-1]
@@ -102,13 +102,12 @@ class GridTradingBot:
         self.order_amount = (self.capital * 0.95) / (self.grid_levels * price)
 
     def place_grid_orders(self):
-        logging.info("📌 Placement des ordres fictifs (simulation)")
+        logging.info("📌 Placement des ordres (simulation)")
         for i in range(self.grid_levels + 1):
             price = self.grid_lower + i * self.grid_size
-            logging.info(f"💸 Ordre fictif à {price:.4f} pour {self.order_amount:.4f} unités")
+            logging.info(f"💸 Ordre fictif à {price:.2f} pour {self.order_amount:.4f} unités")
 
     def run_strategy(self):
-        logging.info("Scheduler started")
         while self.running:
             try:
                 logging.info("🔍 Sélection du meilleur symbole...")
@@ -119,7 +118,6 @@ class GridTradingBot:
                     self.current_symbol = best_symbol
                     self.calculate_grid(best_symbol)
                     self.place_grid_orders()
-
                     if self.telegram_bot:
                         self.telegram_bot.send_message(
                             f"🔄 Nouveau symbole sélectionné: {best_symbol}\n"
@@ -141,12 +139,10 @@ class TelegramInterface:
         self.bot = Bot(token=self.token)
         self.updater = Updater(token=self.token, use_context=True)
         dp = self.updater.dispatcher
-
         dp.add_handler(CommandHandler("start", self.start_command))
 
     def start_command(self, update, context):
-        actual_chat_id = update.effective_chat.id
-        context.bot.send_message(chat_id=actual_chat_id, text=f"🤖 Bot actif !\nTon chat_id est : {actual_chat_id}")
+        context.bot.send_message(chat_id=update.effective_chat.id, text="🤖 Bot actif !")
 
     def send_message(self, message):
         self.bot.send_message(chat_id=self.chat_id, text=message)
@@ -162,9 +158,10 @@ if __name__ == "__main__":
         api_secret=os.getenv("HYPERLIQUID_SECRET")
     )
 
-    bot = GridTradingBot(api, capital=100, scan_interval=60)
+    bot = GridTradingBot(api, capital=50, scan_interval=60)
     telegram = TelegramInterface(os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHAT_ID"), bot)
     bot.telegram_bot = telegram
 
     threading.Thread(target=telegram.start).start()
+    logging.info("Scheduler started")
     bot.run_strategy()
