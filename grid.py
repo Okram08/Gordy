@@ -112,7 +112,8 @@ def select_best_symbol(self):
             price = self.grid_lower + i * self.grid_size
             logging.info(f"💸 Ordre fictif à {price:.2f} pour {self.order_amount:.4f} unités")
 
-    def run_strategy(self):
+def run_strategy(self):
+        """ Méthode principale qui fait tourner la stratégie de grid trading. """
         while self.running:
             try:
                 logging.info("🔍 Sélection du meilleur symbole...")
