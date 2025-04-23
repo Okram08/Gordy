@@ -50,7 +50,7 @@ class HyperliquidAPI:
 
     def get_all_symbols(self):
         markets = self.exchange.load_markets()
-        return [symbol for symbol in markets if ":USDT" in symbol or "/USDT" in symbol]
+        return [symbol for symbol in markets if ":USD" in symbol or "/USD" in symbol]
 
 class GridTradingBot:
     def __init__(self, exchange, capital, grid_levels, dry_run, scan_interval):
