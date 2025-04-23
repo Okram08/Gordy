@@ -117,11 +117,24 @@ class GridTradingBot:
 
     # Méthodes restantes (place_grid_orders, gestion risques, etc.)...
 
-class TelegramInterface:  # Ligne 120
+class TelegramInterface:
     def __init__(self, token, chat_id, bot_logic):
-        # ... code existant ...
-    
-    # Ajoutez cette méthode manquante avec une indentation correcte
+        self.token = token
+        self.chat_id = chat_id
+        self.bot_logic = bot_logic
+        self.bot = Bot(token=self.token)
+        self.updater = Updater(token=self.token, use_context=True)
+        dp = self.updater.dispatcher
+
+        # Commande de démarrage pour tester si le bot fonctionne
+        dp.add_handler(CommandHandler("start", self.start_command))
+
+    def start_command(self, update, context):
+        context.bot.send_message(chat_id=self.chat_id, text="🤖 Bot actif !")
+
+    def send_message(self, message):
+        self.bot.send_message(chat_id=self.chat_id, text=message)
+
     def start(self):
         self.updater.start_polling()
 
