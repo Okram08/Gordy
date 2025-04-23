@@ -48,6 +48,43 @@ class HyperliquidAPI:
     def milliseconds(self):
         return self.exchange.milliseconds()
 
+class GridTradingBot:
+    def __init__(self, exchange, symbols, capital, grid_levels, dry_run, scan_interval):
+        self.exchange = exchange
+        self.symbols = symbols
+        self.capital = capital
+        self.grid_levels = grid_levels
+        self.dry_run = dry_run
+        self.scan_interval = scan_interval
+
+        self.running = True
+        self.current_symbol = None
+        self.total_buy_cost = 0
+        self.total_sell_revenue = 0
+        self.total_fees = 0
+        self.grid_lower = None
+        self.grid_upper = None
+        self.order_amount = None
+        self.telegram_bot = None
+
+    def run(self):
+        while self.running:
+            for symbol in self.symbols:
+                self.current_symbol = symbol
+                ticker = self.exchange.fetch_ticker(symbol)
+                price = ticker['last']
+                logging.info(f"Vérification du symbole {symbol} à {price:.2f}")
+                # Simulation simple de grille : juste achat et vente autour du prix courant
+                grid_range = 0.02 * price
+                self.grid_lower = price - grid_range
+                self.grid_upper = price + grid_range
+                self.order_amount = self.capital / self.grid_levels / price
+                self.total_buy_cost += self.order_amount * price * 0.998  # simulate fee
+                self.total_sell_revenue += self.order_amount * price * 1.002
+                self.total_fees += self.order_amount * price * 0.004
+                logging.info(f"Grille établie pour {symbol}: {self.grid_lower:.2f} à {self.grid_upper:.2f}")
+                time.sleep(self.scan_interval)
+
 class TelegramInterface:
     def __init__(self, token, chat_id, bot_logic):
         self.token = token
@@ -71,7 +108,7 @@ class TelegramInterface:
     def status(self, update, context):
         etat = "✅ Actif" if self.bot_logic.running else "⏸ Pause"
         msg = (
-            f"\U0001F4CA Status Bot\n"
+            f"📊 Status Bot\n"
             f"Actif: {self.bot_logic.current_symbol or 'Aucun'}\n"
             f"Capital: {self.bot_logic.capital:.2f} USDT\n"
             f"Performance: +{(self.bot_logic.total_sell_revenue - self.bot_logic.total_buy_cost - self.bot_logic.total_fees):.2f} USDT\n"
@@ -88,7 +125,7 @@ class TelegramInterface:
         self.send_message("▶ Reprise des opérations")
 
     def stop(self, update, context):
-        self.send_message("\U0001F6D1 Arrêt complet du bot...")
+        self.send_message("🛑 Arrêt complet du bot...")
         self.bot_logic.running = False
         os._exit(0)
 
@@ -109,14 +146,14 @@ class TelegramInterface:
         try:
             new_capital = float(context.args[0])
             self.bot_logic.capital = new_capital
-            self.send_message(f"\U0001F4B0 Capital mis à jour: {new_capital} USDT")
+            self.send_message(f"💰 Capital mis à jour: {new_capital} USDT")
         except:
             self.send_message("⚠ Usage: /capital <montant>")
 
     def grid_report(self, update, context):
         if self.bot_logic.grid_lower:
             msg = (
-                f"\U0001F4CA Rapport Grille\n"
+                f"📊 Rapport Grille\n"
                 f"Symbole: {self.bot_logic.current_symbol}\n"
                 f"Plage: {self.bot_logic.grid_lower:.2f} - {self.bot_logic.grid_upper:.2f}\n"
                 f"Niveaux: {self.bot_logic.grid_levels}\n"
