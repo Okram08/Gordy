@@ -25,7 +25,7 @@ class HyperliquidAPI:
         """Retourne tous les symboles disponibles"""
         try:
             markets = self.exchange.load_markets()
-            symbols = [market for market in markets if 'USDT' in market]
+            symbols = [market for market in markets if 'USD' in market]
             logging.info(f"Symboles récupérés : {symbols}")
             return symbols
         except Exception as e:
