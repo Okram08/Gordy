@@ -60,7 +60,7 @@ class HyperliquidGridTrader:
                 f"{self.base_url}/history",
                 json={
                     "type": "spotCandle",
-                    "pair": f"{token}-USDC",
+                    "pair": f"{token}-USD",
                     "interval": "1h",
                     "limit": 100
                 },
