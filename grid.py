@@ -37,6 +37,8 @@ class HyperliquidGridTrader:
         self.active_orders = []
         self.scheduler = BackgroundScheduler(timezone=utc)
         self.scheduler.start()
+        # Liste des tokens SPOT connus sur Hyperliquid (à compléter selon dispo)
+        self.spot_tokens = ["BTC", "ETH", "SOL", "BNB", "DOGE", "MATIC", "XRP", "LTC"]
 
     def calculate_volatility_score(self, price_data):
         if len(price_data) < 5:  # assoupli pour debug
@@ -57,8 +59,8 @@ class HyperliquidGridTrader:
             response = requests.post(
                 f"{self.base_url}/history",
                 json={
-                    "type": "candle",
-                    "coin": token,
+                    "type": "spotCandle",
+                    "pair": f"{token}-USDC",
                     "interval": "1h",
                     "limit": 100
                 },
@@ -67,47 +69,34 @@ class HyperliquidGridTrader:
             )
             if response.status_code == 200:
                 prices = [float(entry[4]) for entry in response.json()]
-                logger.info(f"{token}: prix récupérés (premiers 5): {prices[:5]}")
+                logger.info(f"{token}: prix spot récupérés (premiers 5): {prices[:5]}")
                 return prices
             else:
-                logger.warning(f"{token}: pas de données de prix (status {response.status_code})")
+                logger.warning(f"{token}: pas de données de prix spot (status {response.status_code})")
             return []
         except Exception as e:
             logger.error(f"Erreur récupération données {token}: {str(e)}")
             return []
 
     def evaluate_tokens(self):
-        try:
-            response = requests.post(
-                f"{self.base_url}/info",
-                json={"type": "meta"},
-                headers=self.headers,
-                timeout=10
-            )
-            data = response.json()
-            tokens = [item["name"] for item in data.get("universe", [])]
-            logger.info(f"Tokens récupérés: {tokens}")
-            if not tokens:
-                logger.warning("Aucun token trouvé dans la réponse API")
-                return []
-            scores = {}
-            for token in tokens[:10]:
-                prices = self.fetch_market_data(token)
-                if prices:
-                    score = self.calculate_volatility_score(prices[-20:])
-                    scores[token] = score
-                else:
-                    logger.info(f"{token}: pas de prix récupérés")
-            logger.info(f"Scores de volatilité: {scores}")
-            sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            if sorted_scores:
-                logger.info(f"Meilleurs tokens: {sorted_scores[:3]}")
+        # On n'utilise que la liste spot connue pour garantir le fonctionnement
+        tokens = self.spot_tokens
+        logger.info(f"Tokens spot testés: {tokens}")
+        scores = {}
+        for token in tokens:
+            prices = self.fetch_market_data(token)
+            if prices:
+                score = self.calculate_volatility_score(prices[-20:])
+                scores[token] = score
             else:
-                logger.info("Aucun token n'a passé le filtre de volatilité")
-            return sorted_scores[:3] or []
-        except Exception as e:
-            logger.error(f"Erreur évaluation tokens: {str(e)}")
-            return []
+                logger.info(f"{token}: pas de prix spot récupérés")
+        logger.info(f"Scores de volatilité: {scores}")
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        if sorted_scores:
+            logger.info(f"Meilleurs tokens: {sorted_scores[:3]}")
+        else:
+            logger.info("Aucun token n'a passé le filtre de volatilité")
+        return sorted_scores[:3] or []
 
     def place_order(self, token, side, price):
         try:
