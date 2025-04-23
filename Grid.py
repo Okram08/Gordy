@@ -176,7 +176,7 @@ if __name__ == "__main__":
     exchange = HyperliquidAPI(api_key, api_secret)
     bot = GridTradingBot(
         exchange=exchange,
-        symbols=['BTC/USD:USD', 'ETH/USD:USD'],
+        symbols=['BTC/USDC:USDC', 'ETH/USDC:USDC'],
         capital=50,
         grid_levels=10,
         dry_run=False,
