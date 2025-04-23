@@ -20,7 +20,7 @@ class HyperliquidAPI:
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
-            'options': {'defaultType': 'swap'}
+            'options': {'defaultType': 'spot'}
         })
         self.load_markets()
 
