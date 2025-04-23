@@ -1,7 +1,6 @@
 import os
 import time
 import ccxt
-import talib
 import numpy as np
 from dotenv import load_dotenv
 from telegram import Update
@@ -21,12 +20,39 @@ exchange = ccxt.hyperliquid({
     'secret': api_secret
 })
 
+# Fonction pour calculer le RSI (Relative Strength Index) manuellement
+def calculate_rsi(prices, period=14):
+    gains = []
+    losses = []
+
+    # Calcul des gains et pertes
+    for i in range(1, len(prices)):
+        change = prices[i] - prices[i - 1]
+        if change >= 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            losses.append(-change)
+            gains.append(0)
+
+    # Calcul des moyennes des gains et pertes
+    avg_gain = np.mean(gains[-period:])
+    avg_loss = np.mean(losses[-period:])
+
+    if avg_loss == 0:
+        return 100  # Eviter la division par zéro si aucune perte
+
+    # Calcul du RSI
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
 # Fonction d'analyse technique (RSI)
 def analyse_token(prices):
-    rsi = talib.RSI(np.array(prices), timeperiod=14)
-    if rsi[-1] > 70:
+    rsi = calculate_rsi(prices)
+    if rsi > 70:
         return "suracheté"
-    elif rsi[-1] < 30:
+    elif rsi < 30:
         return "sous-évalué"
     else:
         return "neutre"
