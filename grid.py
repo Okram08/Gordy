@@ -1,12 +1,15 @@
 import os
 import time
+import asyncio
 import requests
 import numpy as np
+import pytz
 from dotenv import load_dotenv
 from scipy.signal import savgol_filter
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
+from pytz import utc
 
 load_dotenv()
 
@@ -24,7 +27,7 @@ class HyperliquidGridTrader:
         self.check_interval = int(os.getenv("ANALYSIS_INTERVAL", 3600))
         self.current_token = None
         self.active_orders = []
-        self.scheduler = BackgroundScheduler()
+        self.scheduler = BackgroundScheduler(timezone=utc)
         self.scheduler.start()
 
     def calculate_volatility_score(self, price_data):
@@ -74,7 +77,7 @@ class HyperliquidGridTrader:
             if not tokens:
                 return []
             scores = {}
-            for token in tokens[:10]:  # Limite à 10 tokens pour performance
+            for token in tokens[:10]:
                 prices = self.fetch_market_data(token)
                 if prices:
                     scores[token] = self.calculate_volatility_score(prices[-50:])
@@ -113,7 +116,7 @@ class HyperliquidGridTrader:
                 timeout=10
             )
             balance = float(response.json()["marginSummary"]["accountValue"])
-            return round(balance * 0.01 / self.grid_levels, 4)  # 1% total réparti
+            return round(balance * 0.01 / self.grid_levels, 4)
         except:
             return 0.01
 
@@ -162,13 +165,16 @@ class HyperliquidGridTrader:
 
     def send_alert(self, message):
         try:
-            self.tg_bot.send_message(
-                chat_id=self.chat_id,
-                text=f"🚨 HyperGrid Bot:\n{message}",
-                timeout=10
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(
+                self.tg_bot.send_message(
+                    chat_id=self.chat_id,
+                    text=f"🚨 HyperGrid Bot:\n{message}"
+                )
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"Erreur Telegram: {str(e)}")
 
     def start_bot(self):
         self.send_alert("✅ Bot démarré")
@@ -186,7 +192,7 @@ class HyperliquidGridTrader:
         time.sleep(2)
         exit(0)
 
-# Commandes Telegram (asynchrones pour PTB v20+)
+# Commandes Telegram
 async def tg_command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Bot HyperGrid Trading actif!\nCommandes:\n/status - État\n/stop - Arrêt"
@@ -198,13 +204,10 @@ async def tg_command_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == "__main__":
     trader = HyperliquidGridTrader()
-
-    # Configuration Telegram avec la nouvelle API
     application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
     application.add_handler(CommandHandler('start', tg_command_start))
     application.add_handler(CommandHandler('stop', tg_command_stop))
 
-    # Démarrage du bot de trading dans un thread séparé
     import threading
     threading.Thread(target=trader.start_bot, daemon=True).start()
 
