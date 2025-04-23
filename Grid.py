@@ -69,22 +69,23 @@ class TelegramInterface:
         self.bot.send_message(chat_id=self.chat_id, text=message)
 
     def status(self, update, context):
+        etat = "✅ Actif" if self.bot_logic.running else "⏸ Pause"
         msg = (
             f"\U0001F4CA Status Bot\n"
             f"Actif: {self.bot_logic.current_symbol or 'Aucun'}\n"
             f"Capital: {self.bot_logic.capital:.2f} USDT\n"
             f"Performance: +{(self.bot_logic.total_sell_revenue - self.bot_logic.total_buy_cost - self.bot_logic.total_fees):.2f} USDT\n"
-            f"Etat: {'\u2705 Actif' if self.bot_logic.running else '\u23F8 Pause'}"
+            f"Etat: {etat}"
         )
         self.send_message(msg)
 
     def pause(self, update, context):
         self.bot_logic.running = False
-        self.send_message("\u23F8 Bot mis en pause")
+        self.send_message("⏸ Bot mis en pause")
 
     def resume(self, update, context):
         self.bot_logic.running = True
-        self.send_message("\u25B6 Reprise des opérations")
+        self.send_message("▶ Reprise des opérations")
 
     def stop(self, update, context):
         self.send_message("\U0001F6D1 Arrêt complet du bot...")
@@ -93,7 +94,7 @@ class TelegramInterface:
 
     def help(self, update, context):
         help_msg = (
-            "\u2753 Commandes disponibles:\n"
+            "❓ Commandes disponibles:\n"
             "/status - Etat actuel\n"
             "/pause - Mettre en pause\n"
             "/resume - Reprendre\n"
@@ -110,7 +111,7 @@ class TelegramInterface:
             self.bot_logic.capital = new_capital
             self.send_message(f"\U0001F4B0 Capital mis à jour: {new_capital} USDT")
         except:
-            self.send_message("\u26A0 Usage: /capital <montant>")
+            self.send_message("⚠ Usage: /capital <montant>")
 
     def grid_report(self, update, context):
         if self.bot_logic.grid_lower:
@@ -122,7 +123,7 @@ class TelegramInterface:
                 f"Taille ordre: {self.bot_logic.order_amount:.6f}"
             )
         else:
-            msg = "\u26A0 Grille non initialisée"
+            msg = "⚠ Grille non initialisée"
         self.send_message(msg)
 
     def start(self):
