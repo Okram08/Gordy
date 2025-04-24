@@ -163,6 +163,19 @@ async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+# --- Gestion des menus ---
+async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    # Gérer les différentes options du menu
+    if query.data == "menu_classement":
+        await query.edit_message_text(text="Classement des tokens:")
+        # Ajouter ici la logique pour afficher le classement
+    elif query.data == "menu_analyse":
+        await query.edit_message_text(text="Sélectionne un token à analyser.")
+        # Ajouter ici la logique pour afficher l'analyse des tokens
+
 # --- Commande /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await accueil(update, context)
@@ -172,6 +185,5 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu_"))
-    app.add_handler(CallbackQueryHandler(analyse_token_callback, pattern="^analyse_"))
     logger.info("Bot lancé et en attente de commandes.")
     app.run_polling()
