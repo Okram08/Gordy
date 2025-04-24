@@ -1,24 +1,45 @@
-from hyperliquid.info import Info
-from hyperliquid.utils import constants
+import requests
+import json
 
-# Remplace ici par une vraie adresse Ethereum ayant un solde sur Hyperliquid
-user_address = "0x7A58F1dDb718D28e9ea62c2fe13bf881e50B3421"
+def get_spot_balance(address):
+    # URL de l'API
+    url = "https://api.hyperliquid.xyz/info"
+    
+    # Corps de la requête
+    payload = {
+        "type": "spotClearinghouseState",
+        "user": address
+    }
+    
+    # Headers
+    headers = {
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        # Envoi de la requête POST
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        
+        # Vérification du statut de la réponse
+        if response.status_code == 200:
+            # Traitement de la réponse
+            data = response.json()
+            
+            # Affichage des balances
+            if "balances" in data:
+                print(f"Balances spot pour l'utilisateur {address}:")
+                for balance in data["balances"]:
+                    coin = balance.get("coin")
+                    total = balance.get("total")
+                    print(f"{coin}: {total}")
+            else:
+                print("Aucun solde spot trouvé pour cet utilisateur.")
+        else:
+            print(f"Erreur {response.status_code}: {response.text}")
+    except Exception as e:
+        print(f"Erreur lors de la requête : {e}")
 
-info = Info(constants.MAINNET_API_URL, skip_ws=True)
-user_state = info.user_state(user_address)
+# Remplace cette adresse par celle dont tu veux voir le solde
+user_address = "0xb289ee20cd31C74cC73759f215336A2454488d8f"
 
-# Affiche tous les champs pour debug
-print("Réponse brute de l'API :")
-print(user_state)
-
-# Cherche le champ de balances
-spot_balances = user_state.get("spotBalances") or user_state.get("balances")
-
-if spot_balances:
-    print(f"\nBalances spot pour l'utilisateur {user_address}:")
-    for balance in spot_balances:
-        coin = balance.get("coin")
-        total = balance.get("total")
-        print(f"{coin}: {total}")
-else:
-    print("Aucun solde spot trouvé pour cet utilisateur.")
+get_spot_balance(user_address)
