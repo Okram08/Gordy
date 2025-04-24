@@ -1,70 +1,63 @@
 import os
-import json
+import time
+import hmac
+import hashlib
 import requests
 from dotenv import load_dotenv
-from decimal import Decimal
 
-# Charger le .env
+# Charger les variables d'environnement
 load_dotenv()
 
-WALLET_ADDRESS = os.getenv("HL_WALLET_ADDRESS")
-PRIVATE_KEY = os.getenv("HL_PRIVATE_KEY")  # Pas encore utilisé ici
+API_KEY = os.getenv("HL_API_KEY")
+API_SECRET = os.getenv("HL_API_SECRET")
+BASE_URL = "https://api.hyperliquid.xyz"
 
-# API URL
-HL_API_URL = "https://api.hyperliquid.xyz/info"
+def sign_request(secret, payload):
+    """Signature HMAC SHA256 du payload"""
+    return hmac.new(
+        secret.encode('utf-8'),
+        payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
 
-def get_spot_balance(address):
-    payload = {
-        "type": "spotClearinghouseState",
-        "user": address
+def place_order(symbol, side, price, quantity):
+    endpoint = "/order"  # À adapter selon la doc Hyperliquid
+    url = BASE_URL + endpoint
+
+    timestamp = str(int(time.time() * 1000))
+    body = {
+        "symbol": symbol,         # ex: "BTC-USDC"
+        "side": side,             # "buy" ou "sell"
+        "price": str(price),      # ex: "65000"
+        "quantity": str(quantity),# ex: "0.01"
+        "timestamp": timestamp
     }
 
+    # Construction du payload pour la signature
+    payload = "&".join([f"{k}={v}" for k, v in body.items()])
+    signature = sign_request(API_SECRET, payload)
+
+    headers = {
+        "API-KEY": API_KEY,
+        "SIGNATURE": signature,
+        "Content-Type": "application/json"
+    }
+
+    print(f"Envoi de l'ordre: {body}")
+    response = requests.post(url, json=body, headers=headers)
     try:
-        response = requests.post(HL_API_URL, json=payload)
         response.raise_for_status()
-        data = response.json()
-        return data.get("balances", [])
+        print("✅ Ordre envoyé avec succès.")
     except Exception as e:
-        print(f"❌ Erreur lors de la requête : {e}")
-        return []
-
-def build_grid(start_price, end_price, levels):
-    step = (end_price - start_price) / (levels - 1)
-    return [round(start_price + i * step, 4) for i in range(levels)]
-
-def distribute_capital(capital, levels, allocation_type="equal"):
-    if allocation_type == "equal":
-        amount_per_level = capital / levels
-        return [round(amount_per_level, 2)] * levels
-    # Tu peux implémenter des répartitions personnalisées ici
-    return []
-
-def main():
-    print("🔁 Lancement du Grid Trading Bot...")
-
-    # Lire le solde
-    balances = get_spot_balance(WALLET_ADDRESS)
-    usdc_balance = next((Decimal(b["total"]) for b in balances if b["coin"] == "USDC"), Decimal("0"))
-    print(f"💵 Solde USDC disponible : {usdc_balance} USDC")
-
-    # Définir les paramètres de la grille
-    total_capital = Decimal(input("💰 Capital à allouer (USDC) : "))
-    start_price = Decimal(input("📈 Prix minimum : "))
-    end_price = Decimal(input("📉 Prix maximum : "))
-    levels = int(input("📊 Nombre de grilles : "))
-
-    if total_capital > usdc_balance:
-        print("❗ Capital supérieur à ton solde. Abandon.")
-        return
-
-    grid = build_grid(start_price, end_price, levels)
-    allocations = distribute_capital(total_capital, levels)
-
-    print("\n📋 Stratégie Grid Trading :")
-    for i in range(levels):
-        print(f"Grille {i+1}: Prix {grid[i]} USDC → Allocation {allocations[i]} USDC")
-
-    # Prochaine étape : placer les ordres spot ici via l’API (à discuter 😉)
+        print("❌ Erreur lors de l'envoi de l'ordre:", e)
+    return response.json()
 
 if __name__ == "__main__":
-    main()
+    # Exemple d'utilisation
+    symbol = "BTC-USDC"
+    side = "buy"
+    price = 65000
+    quantity = 0.01
+
+    result = place_order(symbol, side, price, quantity)
+    print("Réponse de l'API :", result)
