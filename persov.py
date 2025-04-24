@@ -22,8 +22,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Liste des 20 premiers tokens hors stablecoins (2025)
-T# Liste des 50 premiers tokens hors stablecoins (2025)
+# Liste des 50 premiers tokens hors stablecoins (2025)
 TOP_TOKENS = [
     ("bitcoin", "BTCUSDT"),
     ("ethereum", "ETHUSDT"),
