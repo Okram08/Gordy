@@ -41,6 +41,7 @@ def place_grid_orders():
 
     # Vérifier le solde disponible
     balance = dex.fetch_balance()
+    print(balance)
     usdc_dispo = float(balance['USDC']['free'])
     nombre_ordres = grid_levels * 2
     capital_requis = usdc_par_ordre * nombre_ordres
