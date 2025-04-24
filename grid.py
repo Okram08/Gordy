@@ -3,6 +3,7 @@ import time
 import hmac
 import hashlib
 import requests
+from decimal import Decimal
 from dotenv import load_dotenv
 
 # Charger les variables d'environnement
@@ -52,12 +53,45 @@ def place_order(symbol, side, price, quantity):
         print("❌ Erreur lors de l'envoi de l'ordre:", e)
     return response.json()
 
-if __name__ == "__main__":
-    # Exemple d'utilisation
-    symbol = "BTC-USDC"
-    side = "buy"
-    price = 65000
-    quantity = 0.01
+def build_grid(start_price, end_price, levels):
+    step = (end_price - start_price) / (levels - 1)
+    return [round(start_price + i * step, 4) for i in range(levels)]
 
-    result = place_order(symbol, side, price, quantity)
-    print("Réponse de l'API :", result)
+def distribute_capital(capital, levels):
+    amount_per_level = capital / levels
+    return [round(amount_per_level, 6) for _ in range(levels)]
+
+def main():
+    print("🔁 Lancement du Grid Trading Bot...")
+
+    # Saisie interactive
+    symbol = input("🪙 Quel token veux-tu trader ? (ex: BTC-USDC) : ").strip().upper()
+    total_capital = Decimal(input("💰 Capital à allouer (en USDC) : "))
+    start_price = Decimal(input("📈 Prix minimum : "))
+    end_price = Decimal(input("📉 Prix maximum : "))
+    levels = int(input("📊 Nombre de grilles : "))
+
+    # Construction de la grille
+    grid = build_grid(start_price, end_price, levels)
+    allocations = distribute_capital(total_capital, levels)
+
+    print("\n📋 Stratégie Grid Trading :")
+    for i in range(levels):
+        print(f"Grille {i+1}: Prix {grid[i]} USDC → Allocation {allocations[i]} USDC")
+
+    confirmation = input("\n✅ Confirmer le placement des ordres ? (o/n) : ").strip().lower()
+    if confirmation != "o":
+        print("❌ Annulé par l'utilisateur.")
+        return
+
+    # Placement des ordres d'achat sur chaque niveau de grille
+    for i in range(levels):
+        price = grid[i]
+        # On suppose que l'allocation est en USDC, donc quantité = allocation/prix
+        quantity = float(allocations[i]) / float(price)
+        result = place_order(symbol, "buy", price, quantity)
+        print("Réponse API :", result)
+        time.sleep(1)  # Petite pause pour éviter le spam API
+
+if __name__ == "__main__":
+    main()
