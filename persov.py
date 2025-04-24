@@ -127,32 +127,20 @@ def generate_signal_and_score(df):
 
 # --- Ecran d'accueil ---
 async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Créer un clavier inline avec les boutons
     keyboard = [
         [InlineKeyboardButton("🏆 Classement", callback_data="menu_classement")],
         [InlineKeyboardButton("📊 Analyse", callback_data="menu_analyse")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    # Récupérer l'ID du chat
     chat_id = (
         update.effective_chat.id
         if update.effective_chat
         else update.callback_query.message.chat_id
     )
-    
-    # Envoyer un message avec un clavier inline, désactivant la barre de message
     await context.bot.send_message(
         chat_id=chat_id,
         text="👋 Bienvenue ! Que souhaitez-vous faire ?",
         reply_markup=reply_markup
-    )
-    
-    # Désactivation de la barre de message via un nouveau message sans `reply_markup` :
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="Vous ne pouvez plus envoyer de messages libres. Veuillez utiliser les boutons ci-dessus.",
-        reply_markup=None
     )
 
 # --- Commande /start ---
@@ -211,7 +199,6 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not results:
         await context.bot.edit_message_text("Aucun signal fort détecté.", chat_id=chat_id, message_id=message.message_id)
-        # Affiche l'écran d'accueil dans un NOUVEAU message
         await accueil(update, context)
         return
 
@@ -225,7 +212,6 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"   Commentaire : {res['commentaire']}\n"
         )
     await context.bot.edit_message_text(final_msg, chat_id=chat_id, message_id=message.message_id)
-    # Affiche l'écran d'accueil dans un NOUVEAU message
     await accueil(update, context)
 
 # --- Analyse (callback) ---
@@ -267,7 +253,6 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         f"{commentaire}"
     )
     await context.bot.send_message(chat_id=chat_id, text=result)
-    # Affiche l'écran d'accueil dans un NOUVEAU message
     await accueil(update, context)
 
 # --- Main ---
