@@ -83,47 +83,55 @@ def compute_indicators(df):
 
 def generate_signal_and_score(df):
     latest = df.iloc[-1]
-    score = 0
-    commentaire = ""
+    score_buy = 0
+    score_sell = 0
+
+    # Critères BUY
     if latest["close"] > latest["SMA200"]:
-        if (
-            latest["EMA10"] > latest["SMA20"] and
-            latest["RSI"] < 35 and
-            latest["close"] < latest["BB_lower"] and
-            latest["MACD"] > 0 and
-            latest["ADX"] > 20 and
-            latest["volume"] > 1.5 * latest["volume_mean"]
-        ):
-            signal = "📈 BUY"
-            score += abs(latest["EMA10"] - latest["SMA20"])
-            score += max(0, 35 - latest["RSI"])
-            score += latest["MACD"]
-            score += latest["ADX"] / 2
-            commentaire = "Signal d'achat confirmé (survente, volume élevé, MACD haussier, tendance forte)."
-        else:
-            signal = "🤝 HOLD"
-            commentaire = "Aucun signal d'achat fort malgré la tendance haussière."
-    elif latest["close"] < latest["SMA200"]:
-        if (
-            latest["EMA10"] < latest["SMA20"] and
-            latest["RSI"] > 65 and
-            latest["close"] > latest["BB_upper"] and
-            latest["MACD"] < 0 and
-            latest["ADX"] > 20 and
-            latest["volume"] > 1.5 * latest["volume_mean"]
-        ):
-            signal = "📉 SELL"
-            score += abs(latest["EMA10"] - latest["SMA20"])
-            score += max(0, latest["RSI"] - 65)
-            score += abs(latest["MACD"])
-            score += latest["ADX"] / 2
-            commentaire = "Signal de vente confirmé (surachat, volume élevé, MACD baissier, tendance forte)."
-        else:
-            signal = "🤝 HOLD"
-            commentaire = "Aucun signal de vente fort malgré la tendance baissière."
+        score_buy += 1
+    if latest["EMA10"] > latest["SMA20"]:
+        score_buy += 1
+    if latest["RSI"] < 40:
+        score_buy += 1
+    if latest["close"] < latest["BB_lower"]:
+        score_buy += 1
+    if latest["MACD"] > 0:
+        score_buy += 1
+    if latest["ADX"] > 20:
+        score_buy += 1
+    if latest["volume"] > 1.2 * latest["volume_mean"]:
+        score_buy += 1
+
+    # Critères SELL
+    if latest["close"] < latest["SMA200"]:
+        score_sell += 1
+    if latest["EMA10"] < latest["SMA20"]:
+        score_sell += 1
+    if latest["RSI"] > 60:
+        score_sell += 1
+    if latest["close"] > latest["BB_upper"]:
+        score_sell += 1
+    if latest["MACD"] < 0:
+        score_sell += 1
+    if latest["ADX"] > 20:
+        score_sell += 1
+    if latest["volume"] > 1.2 * latest["volume_mean"]:
+        score_sell += 1
+
+    # Seuil : 4 critères sur 7 suffisent pour un signal fort
+    if score_buy >= 4 and score_buy >= score_sell:
+        signal = "📈 BUY"
+        score = score_buy
+        commentaire = f"Signal d'achat ({score_buy}/7 critères validés)."
+    elif score_sell >= 4 and score_sell > score_buy:
+        signal = "📉 SELL"
+        score = score_sell
+        commentaire = f"Signal de vente ({score_sell}/7 critères validés)."
     else:
         signal = "🤝 HOLD"
-        commentaire = "Aucun signal clair détecté."
+        score = max(score_buy, score_sell)
+        commentaire = "Aucun signal fort. Tendance neutre ou mitigée."
+
     return signal, score, commentaire
 
 # --- Ecran d'accueil ---
@@ -205,7 +213,7 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "price": latest["close"],
                     "commentaire": commentaire
                 })
-                progress_msg += f"✅ {name.title()} : Signal {signal} | Score {score:.2f}\n"
+                progress_msg += f"✅ {name.title()} : Signal {signal} | Score {score}/7\n"
             else:
                 progress_msg += f"➖ {name.title()} : Aucun signal fort.\n"
 
@@ -227,7 +235,7 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         final_msg += (
             f"\n*{i}. {res['name']}* (`{res['symbol']}`)\n"
             f"   Prix : `{res['price']:.4f}` USDT\n"
-            f"   Signal : {res['signal']} | Score : `{res['score']:.2f}`\n"
+            f"   Signal : {res['signal']} | Score : `{res['score']}/7`\n"
             f"   _{res['commentaire']}_\n"
         )
     keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]]
@@ -245,7 +253,6 @@ async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
         for name, symbol in TOP_TOKENS
     ]
-    # Le bouton retour est présent dans le menu d'analyse
     keyboard.append([InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     chat_id = update.callback_query.message.chat_id
@@ -277,10 +284,9 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         f"*RSI* : `{latest['RSI']:.2f}` | *MACD* : `{latest['MACD']:.4f}` | *ADX* : `{latest['ADX']:.2f}`\n"
         f"*Bollinger* : [`{latest['BB_lower']:.4f}` ; `{latest['BB_upper']:.4f}`]\n"
         f"*Volume actuel* : `{latest['volume']:.2f}` | *Moyenne* : `{latest['volume_mean']:.2f}`\n"
-        f"*Signal* : {signal} | *Score* : `{score:.2f}`\n"
+        f"*Signal* : {signal} | *Score* : `{score}/7`\n"
         f"_{commentaire}_"
     )
-    # Pas de bouton retour ici, on envoie directement le menu d'accueil après l'analyse
     await context.bot.send_message(chat_id=chat_id, text=result, parse_mode=ParseMode.MARKDOWN)
     await accueil(update, context)
 
