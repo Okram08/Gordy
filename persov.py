@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Liste des 50 premiers tokens hors stablecoins (2025)
+# Liste des 20 premiers tokens hors stablecoins (2025)
 TOP_TOKENS = [
     ("bitcoin", "BTCUSDT"),
     ("ethereum", "ETHUSDT"),
@@ -44,37 +44,6 @@ TOP_TOKENS = [
     ("polkadot", "DOTUSDT"),
     ("litecoin", "LTCUSDT"),
     ("polygon", "MATICUSDT"),
-    ("uniswap", "UNIUSDT"),
-    ("filecoin", "FILUSDT"),
-    ("vechain", "VETUSDT"),
-    ("aave", "AAVEUSDT"),
-    ("monero", "XMRUSDT"),
-    ("tezos", "XTZUSDT"),
-    ("cosmos", "ATOMUSDT"),
-    ("fantom", "FTMUSDT"),
-    ("near protocol", "NEARUSDT"),
-    ("internet computer", "ICPUSDT"),
-    ("flow", "FLOWUSDT"),
-    ("eos", "EOSUSDT"),
-    ("elrond", "EGLDUSDT"),
-    ("kusama", "KSMUSDT"),
-    ("chiliz", "CHZUSDT"),
-    ("helium", "HNTUSDT"),
-    ("decentraland", "MANAUSDT"),
-    ("the sandbox", "SANDUSDT"),
-    ("curve dao", "CRVUSDT"),
-    ("maker", "MKRUSDT"),
-    ("optimism", "OPUSDT"),
-    ("arbitrum", "ARBUSDT"),
-    ("raven", "RVNUSDT"),
-    ("quant", "QNTUSDT"),
-    ("1inch", "1INCHUSDT"),
-    ("synthetix", "SNXUSDT"),
-    ("yearn finance", "YFIUSDT"),
-    ("shiba inu", "SHIBUSDT"),
-    ("solana", "SOLUSDT"),
-    ("avalanche", "AVAXUSDT"),
-    ("kusama", "KSMUSDT")
 ]
 
 # --- Analyse ---
@@ -276,7 +245,8 @@ async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
         for name, symbol in TOP_TOKENS
     ]
-    # PAS de bouton retour ici !
+    # Le bouton retour est présent dans le menu d'analyse
+    keyboard.append([InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     chat_id = update.callback_query.message.chat_id
     await context.bot.send_message(chat_id=chat_id, text="📊 *Sélectionnez une crypto :*", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
@@ -310,9 +280,9 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         f"*Signal* : {signal} | *Score* : `{score:.2f}`\n"
         f"_{commentaire}_"
     )
-    # On laisse le bouton retour ici pour revenir à la liste des cryptos
-    keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="menu_analyse")]]
-    await context.bot.send_message(chat_id=chat_id, text=result, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    # Pas de bouton retour ici, on envoie directement le menu d'accueil après l'analyse
+    await context.bot.send_message(chat_id=chat_id, text=result, parse_mode=ParseMode.MARKDOWN)
+    await accueil(update, context)
 
 # --- Aide (callback) ---
 async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
