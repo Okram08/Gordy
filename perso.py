@@ -7,35 +7,34 @@ from telegram.ext import (
     ConversationHandler, filters
 )
 from moralis import evm_api
-import pandas as pd
 
-# --- Logging ---
+# --- Logging configuration: affichage en temps réel dans le terminal ---
 logging.basicConfig(
-    filename="bot_crypto.log",
     level=logging.INFO,
     format="%(asctime)s %(levelname)s:%(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# --- ENV ---
+# --- Chargement des variables d'environnement ---
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 MORALIS_API_KEY = os.getenv("MORALIS_API_KEY")
 
-# --- Conversation states ---
+# --- États de la conversation ---
 ASK_TOKEN = 1
 
-# --- Utilitaires Moralis ---
+# --- Fonction pour récupérer le prix du token via Moralis ---
 def get_token_price(token_address, chain="eth"):
     try:
         params = {"address": token_address, "chain": chain}
         result = evm_api.token.get_token_price(api_key=MORALIS_API_KEY, params=params)
+        logger.info(f"Prix récupéré pour {token_address}: {result['usdPrice']} USD")
         return result["usdPrice"]
     except Exception as e:
         logger.error(f"Erreur Moralis API: {e}")
         return None
 
-# --- Conversation Telegram ---
+# --- Handlers Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {update.effective_user.id} started the bot.")
     await update.message.reply_text(
@@ -45,22 +44,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     token_address = update.message.text.strip()
-    logger.info(f"User {update.effective_user.id} asked for token: {token_address}")
+    logger.info(f"User {update.effective_user.id} demande le token: {token_address}")
     price = get_token_price(token_address)
     if price:
         await update.message.reply_text(
             f"Le prix actuel du token ({token_address}) est : {price:.4f} USD"
         )
-        logger.info(f"Sent price {price} for token {token_address}")
+        logger.info(f"Réponse envoyée pour le token {token_address}")
     else:
         await update.message.reply_text(
             "Impossible de récupérer le prix pour ce token. Vérifie l'adresse et réessaie."
         )
-        logger.warning(f"Failed to fetch price for {token_address}")
+        logger.warning(f"Echec récupération prix pour {token_address}")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Opération annulée.")
+    logger.info(f"User {update.effective_user.id} a annulé l'opération.")
     return ConversationHandler.END
 
 if __name__ == "__main__":
@@ -75,5 +75,5 @@ if __name__ == "__main__":
     )
 
     app.add_handler(conv_handler)
-    logger.info("Bot launched and waiting for commands.")
+    logger.info("Bot lancé et en attente de commandes.")
     app.run_polling()
