@@ -127,34 +127,6 @@ def prepare_data(df, features):
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
-def evaluate_trade_performance(entry, current_price):
-    """
-    Évalue la performance d'un trade en fonction du prix actuel, TP et SL.
-    """
-    direction = entry['direction']  # ⬆️ LONG, ⬇️ SHORT, 🔁 NEUTRE
-    tp = entry['tp']
-    sl = entry['sl']
-    actual_return = current_price - entry['current_price']  # Calcul du retour réel par rapport au prix initial
-
-    # Calcul de la performance par rapport au TP/SL
-    if direction == "⬆️ LONG":
-        if current_price >= tp:
-            return "Bon"  # Le prix a atteint le TP
-        elif current_price <= sl:
-            return "Mauvais"  # Le prix a atteint le SL
-        else:
-            return "Moyenne"  # Le prix est entre TP et SL
-    elif direction == "⬇️ SHORT":
-        if current_price <= tp:
-            return "Bon"  # Le prix a atteint le TP
-        elif current_price >= sl:
-            return "Mauvais"  # Le prix a atteint le SL
-        else:
-            return "Moyenne"  # Le prix est entre TP et SL
-    else:
-        # Cas NEUTRE où le bot n'a pas pris de position (ex. marché indécis)
-        return "Moyenne"
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
     return ASK_TOKEN
@@ -189,12 +161,12 @@ async def analyze_and_reply(update: Update, token: str):
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
-            model = Sequential([  # Création d'un modèle LSTM
-                Input(shape=(X_train.shape[1], X_train.shape[2])),
-                LSTM(64, return_sequences=True),
-                Dropout(0.3),
-                LSTM(32),
-                Dropout(0.2),
+            model = Sequential([ 
+                Input(shape=(X_train.shape[1], X_train.shape[2])), 
+                LSTM(64, return_sequences=True), 
+                Dropout(0.3), 
+                LSTM(32), 
+                Dropout(0.2), 
                 Dense(3, activation='softmax')
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
@@ -217,30 +189,14 @@ async def analyze_and_reply(update: Update, token: str):
         tp = current_price + 2 * atr if pred_class == 2 else (current_price - 2 * atr if pred_class == 0 else current_price)
         sl = current_price - atr if pred_class == 2 else (current_price + atr if pred_class == 0 else current_price)
 
-        # Évaluation de la performance du trade
-        entry = {
-            'token': token,
-            'timestamp': str(datetime.now()),
-            'direction': direction,
-            'confidence': confidence,
-            'pred_class': int(pred_class),
-            'current_price': float(current_price),
-            'tp': float(tp),
-            'sl': float(sl)
-        }
-        performance = evaluate_trade_performance(entry, current_price)
-
-        # Ajout de la performance dans le message final
         message = (
             f"📊 {token.upper()} - Signal IA\n"
             f"🎯 Direction: {direction}\n"
             f"📈 Confiance: {confidence*100:.2f}%\n"
             f"💰 Prix live: {current_price:.2f}$\n"
             f"🎯 TP: {tp:.2f}$ | 🛑 SL: {sl:.2f}$\n"
-            f"📊 Performance: {performance}\n"
         )
 
-        # Historique avec évaluation de la performance
         history = load_history()
         result = {
             'token': token,
@@ -250,8 +206,7 @@ async def analyze_and_reply(update: Update, token: str):
             'pred_class': int(pred_class),
             'current_price': float(current_price),
             'tp': float(tp),
-            'sl': float(sl),
-            'performance': performance  # Ajouter la performance dans l'historique
+            'sl': float(sl)
         }
         history.append(result)
         save_history(history)
@@ -268,7 +223,6 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         messages = [
             f"🕒 {entry['timestamp']}\n📉 {entry['token'].upper()} | {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
             f"💰 Prix: {entry['current_price']:.2f}$ | TP: {entry['tp']:.2f}$ | SL: {entry['sl']:.2f}$\n"
-            f"📊 Performance: {entry['performance']}\n"
             for entry in history[-5:]
         ]
         await update.message.reply_text("\n\n".join(messages))
@@ -280,9 +234,7 @@ def main() -> None:
     application.add_handler(CommandHandler("history", show_history))
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
-        states={
-            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
-        },
+        states={ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)]},
         fallbacks=[]
     )
     application.add_handler(conv_handler)
