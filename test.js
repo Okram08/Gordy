@@ -1,46 +1,73 @@
 require('dotenv').config();
-
 const { Hyperliquid } = require('hyperliquid');
 const prompt = require('prompt-sync')({ sigint: true });
 
-// Récupération de la clé privée depuis .env
 const privateKey = process.env.HL_PRIVATE_KEY;
 if (!privateKey) {
-  console.error('Erreur : La clé privée Hyperliquid n\'est pas définie dans .env (HL_PRIVATE_KEY)');
+  console.error('Erreur : Clé privée manquante dans .env');
   process.exit(1);
 }
 
-// Demande des paramètres à l'utilisateur
-const symbol = prompt('Entrez le symbole spot (ex: BTC-SPOT) : ').trim();
-const montant = prompt('Montant à allouer (en USDC) : ').trim();
-const price = prompt('Prix limite souhaité : ').trim();
-
-// Initialisation du SDK Hyperliquid
 const sdk = new Hyperliquid({
   privateKey: privateKey,
   enableWs: false,
-  testnet: false, // Passe à true si tu veux utiliser le testnet
+  testnet: false,
 });
 
-async function main() {
-  try {
-    // Affichage des soldes (optionnel)
-    const balances = await sdk.info.userState();
-    console.log('Vos soldes :', balances);
+async function getCurrentPrice(symbol) {
+  const ticker = await sdk.info.ticker({ symbol });
+  return parseFloat(ticker.markPrice);
+}
 
-    // Passage de l'ordre spot
-    const order = await sdk.order.placeOrder({
-      symbol: symbol,  // ex: 'BTC-SPOT'
-      price: price,    // prix limite
-      size: montant,   // montant en USDC
-      side: 'buy',     // 'buy' ou 'sell'
-      type: 'limit',   // 'limit' ou 'market'
+async function placeGridOrders(symbol, lower, upper, grids, totalAmount) {
+  const step = (upper - lower) / (grids - 1);
+  const orders = [];
+  const amountPerOrder = totalAmount / grids;
+
+  for (let i = 0; i < grids; i++) {
+    const price = lower + step * i;
+    const side = price < (lower + upper) / 2 ? 'buy' : 'sell';
+    orders.push({
+      symbol,
+      price: price.toFixed(2),
+      size: amountPerOrder.toFixed(6),
+      side,
+      type: 'limit',
     });
-
-    console.log('Ordre envoyé :', order);
-  } catch (err) {
-    console.error('Erreur lors de la passation de l\'ordre :', err);
   }
+
+  for (const order of orders) {
+    try {
+      const res = await sdk.order.placeOrder(order);
+      console.log(`Ordre ${order.side} placé à ${order.price} :`, res);
+    } catch (err) {
+      console.error('Erreur lors de la pose de l\'ordre :', err);
+    }
+  }
+}
+
+async function main() {
+  const symbol = prompt('Entrez le symbole spot (ex: BTC-SPOT) : ').trim();
+  const totalAmount = parseFloat(prompt('Montant total à allouer (en USDC) : ').trim());
+  const grids = parseInt(prompt('Nombre de grilles (ex: 7) : ').trim(), 10);
+
+  // Récupérer le prix actuel
+  const currentPrice = await getCurrentPrice(symbol);
+
+  // Définir automatiquement la fourchette de prix (ex: ±3% autour du prix actuel)
+  const rangePct = 0.03;
+  const lower = currentPrice * (1 - rangePct);
+  const upper = currentPrice * (1 + rangePct);
+
+  console.log(`Prix actuel : ${currentPrice}`);
+  console.log(`Fourchette automatique : [${lower.toFixed(2)} ; ${upper.toFixed(2)}]`);
+
+  // Placer les ordres de la grille
+  await placeGridOrders(symbol, lower, upper, grids, totalAmount);
+
+  // Boucle principale (surveillance et replacement des ordres exécutés)
+  // Pour un bot complet, il faudrait ici surveiller les ordres exécutés et replacer des ordres opposés pour maintenir la grille.
+  // Ceci est un squelette de départ.
 }
 
 main();
