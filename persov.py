@@ -88,15 +88,52 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Gérer les différentes options du menu
     if query.data == "menu_classement":
-        await query.edit_message_text(text="Classement des tokens:")
-        # Ajouter ici la logique pour afficher le classement des tokens
-        await query.edit_message_text(text="Classement des tokens :\n1. Bitcoin\n2. Ethereum\n...")
+        await query.edit_message_text(text="Classement des tokens en cours...")
+        
+        classement = "\n".join([f"{idx+1}. {name.title()} ({symbol})" for idx, (name, symbol) in enumerate(TOP_TOKENS)])
+        await query.edit_message_text(text=f"Voici le classement des tokens :\n{classement}")
+
     elif query.data == "menu_analyse":
         await query.edit_message_text(text="Sélectionne un token à analyser.")
-        # Ajouter ici la logique pour afficher l'analyse des tokens (ou demander une sélection)
-        await query.edit_message_text(text="Analyse des tokens :\n1. Bitcoin\n2. Ethereum\n...")
+        
+        # Créer un clavier dynamique avec les crypto-monnaies
+        keyboard = [
+            [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
+            for name, symbol in TOP_TOKENS
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text="Cliquez sur un token pour analyser", reply_markup=reply_markup)
+
     else:
         await query.edit_message_text(text="Option non reconnue.")
+
+# --- Analyse d'un token ---
+async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()  # Répondre au CallbackQuery pour éviter un timeout
+
+    # Récupérer le symbole du token
+    symbol = query.data.replace("analyse_", "")
+    name = next((name.title() for name, sym in TOP_TOKENS if sym == symbol), symbol)
+    
+    await query.edit_message_text(text=f"🔍 Analyse de {name} ({symbol}) en cours...")
+
+    # Récupérer les données pour le token
+    df = get_binance_ohlc(symbol)
+    if df is None or len(df) < 50:
+        await query.edit_message_text(text=f"❌ Pas assez de données pour {name}.")
+        await accueil(update, context)
+        return
+
+    # Calculer les indicateurs
+    df = compute_indicators(df)
+    latest = df.iloc[-1]
+    result = (
+        f"📊 Résultat pour {name} ({symbol}):\n"
+        f"Prix : {latest['close']:.4f} USDT\n"
+    )
+    await query.edit_message_text(text=result)
+    await accueil(update, context)
 
 # --- Commande /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -107,5 +144,6 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu_"))
+    app.add_handler(CallbackQueryHandler(analyse_token_callback, pattern="^analyse_"))
     logger.info("Bot lancé et en attente de commandes.")
     app.run_polling()
