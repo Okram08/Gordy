@@ -23,12 +23,12 @@ function ask(question) {
 }
 
 async function getSpotPrice(symbol) {
-    // symbol: "BTC-USDC" => market: "BTC"
-    const market = symbol.split('-')[0];
-    const info = await sdk.info.markets();
-    const mkt = info.find(m => m.name === market);
-    if (!mkt) throw new Error("Marché non trouvé");
-    return parseFloat(mkt.markPrice);
+    // symbol: "BTC-USDC" => key: "BTC-SPOT"
+    const coin = symbol.split('-')[0];
+    const allMids = await sdk.info.getAllMids();
+    const key = `${coin}-SPOT`;
+    if (!(key in allMids)) throw new Error("Marché spot non trouvé");
+    return parseFloat(allMids[key]);
 }
 
 function buildGrid(centerPrice, levels, spread) {
@@ -47,17 +47,17 @@ function distributeCapital(capital, levels) {
 }
 
 async function placeOrder(symbol, side, price, quantity) {
-    // symbol: "BTC-USDC" => market: "BTC"
-    const market = symbol.split('-')[0];
+    const coin = symbol.split('-')[0] + "-SPOT";
     const order = {
-        market,
-        side, // "buy" ou "sell"
-        size: quantity,
-        price,
-        type: "limit"
+        coin,
+        is_buy: side === "buy",
+        sz: quantity,
+        limit_px: price,
+        reduce_only: false,
+        order_type: { limit: { tif: 'Gtc' } }
     };
     console.log(`🚀 Envoi de l'ordre LIVE:`, order);
-    const res = await sdk.trade.placeOrder(order);
+    const res = await sdk.exchange.placeOrder(order);
     if (res.status === "ok") {
         console.log("✅ Ordre envoyé avec succès:", res);
     } else {
