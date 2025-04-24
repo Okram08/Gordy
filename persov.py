@@ -123,16 +123,32 @@ def generate_signal_and_score(df):
         signal = "📈 BUY"
         score = score_buy
         commentaire = f"Signal d'achat ({score_buy}/7 critères validés)."
+        entry = latest["close"]
+        sl1 = latest["SMA200"] * 0.997  # un peu sous la SMA200
+        sl2 = entry * 0.97              # -3%
+        stop_loss = min(sl1, sl2)
+        tp1 = latest["BB_upper"] * 0.995  # un peu sous la résistance
+        tp2 = entry * 1.06                # +6%
+        take_profit = max(tp1, tp2)
     elif score_sell >= 4 and score_sell > score_buy:
         signal = "📉 SELL"
         score = score_sell
         commentaire = f"Signal de vente ({score_sell}/7 critères validés)."
+        entry = latest["close"]
+        sl1 = latest["SMA200"] * 1.003  # un peu au-dessus de la SMA200
+        sl2 = entry * 1.03              # +3%
+        stop_loss = max(sl1, sl2)
+        tp1 = latest["BB_lower"] * 1.005  # un peu au-dessus du support
+        tp2 = entry * 0.94                # -6%
+        take_profit = min(tp1, tp2)
     else:
         signal = "🤝 HOLD"
         score = max(score_buy, score_sell)
         commentaire = "Aucun signal fort. Tendance neutre ou mitigée."
+        stop_loss = None
+        take_profit = None
 
-    return signal, score, commentaire
+    return signal, score, commentaire, stop_loss, take_profit
 
 # --- Ecran d'accueil ---
 async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -201,7 +217,7 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 continue
 
             df = compute_indicators(df)
-            signal, score, commentaire = generate_signal_and_score(df)
+            signal, score, commentaire, stop_loss, take_profit = generate_signal_and_score(df)
             latest = df.iloc[-1]
 
             if signal != "🤝 HOLD":
@@ -274,7 +290,7 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     df = compute_indicators(df)
-    signal, score, commentaire = generate_signal_and_score(df)
+    signal, score, commentaire, stop_loss, take_profit = generate_signal_and_score(df)
     latest = df.iloc[-1]
 
     result = (
@@ -285,8 +301,13 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         f"*Bollinger* : [`{latest['BB_lower']:.4f}` ; `{latest['BB_upper']:.4f}`]\n"
         f"*Volume actuel* : `{latest['volume']:.2f}` | *Moyenne* : `{latest['volume_mean']:.2f}`\n"
         f"*Signal* : {signal} | *Score* : `{score}/7`\n"
-        f"_{commentaire}_"
+        f"_{commentaire}_\n"
     )
+    if signal in ["📈 BUY", "📉 SELL"]:
+        result += (
+            f"\n*🎯 Take Profit* : `{take_profit:.4f}` USDT"
+            f"\n*🛑 Stop Loss* : `{stop_loss:.4f}` USDT"
+        )
     await context.bot.send_message(chat_id=chat_id, text=result, parse_mode=ParseMode.MARKDOWN)
     await accueil(update, context)
 
