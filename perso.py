@@ -125,30 +125,40 @@ def generate_signal_and_score(df):
         commentaire = "Aucun signal clair détecté."
     return signal, score, commentaire
 
-# --- Commandes Telegram ---
+# --- Ecran d'accueil ---
+async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🏆 Classement", callback_data="menu_classement")],
+        [InlineKeyboardButton("📊 Analyse", callback_data="menu_analyse")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            "👋 Bienvenue ! Que souhaitez-vous faire ?", reply_markup=reply_markup
+        )
+    else:
+        await update.message.reply_text(
+            "👋 Bienvenue ! Que souhaitez-vous faire ?", reply_markup=reply_markup
+        )
+
+# --- Commande /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [
-            InlineKeyboardButton("Classement", callback_data="classement"),
-            InlineKeyboardButton("Analyse", callback_data="analyse")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "👋 Bienvenue ! Sélectionnez une option ci-dessous pour commencer :",
-        reply_markup=reply_markup
-    )
+    await accueil(update, context)
 
-async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton(name.title(), callback_data=symbol)]
-        for name, symbol in TOP_TOKENS
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("📊 Sélectionnez une crypto pour analyser :", reply_markup=reply_markup)
+# --- Handler du menu principal ---
+async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
 
-async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = await update.message.reply_text("🔎 Analyse des 20 tokens en cours...")
+    if data == "menu_classement":
+        await classement_callback(update, context)
+    elif data == "menu_analyse":
+        await analyse_callback(update, context)
+
+# --- Classement (callback) ---
+async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    message = await query.edit_message_text("🔎 Analyse des 20 tokens en cours...")
     results = []
     progress_msg = ""
 
@@ -186,6 +196,7 @@ async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not results:
         await message.edit_text("Aucun signal fort détecté.")
+        await accueil(update, context)
         return
 
     results = sorted(results, key=lambda x: x["score"], reverse=True)[:3]
@@ -198,21 +209,52 @@ async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"   Commentaire : {res['commentaire']}\n"
         )
     await message.edit_text(final_msg)
+    await accueil(update, context)
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- Analyse (callback) ---
+async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
+        for name, symbol in TOP_TOKENS
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.edit_message_text("📊 Sélectionnez une crypto :", reply_markup=reply_markup)
+
+# --- Analyse d'un token (callback) ---
+async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-    action = query.data
+    symbol = query.data.replace("analyse_", "")
+    name = next((name.title() for name, sym in TOP_TOKENS if sym == symbol), symbol)
+    await query.edit_message_text(text=f"🔍 Analyse de {name} en cours...")
 
-    if action == "analyse":
-        await analyse(update, context)
-    elif action == "classement":
-        await classement(update, context)
+    df = get_binance_ohlc(symbol)
+    if df is None or len(df) < 50:
+        await query.edit_message_text(f"❌ Pas assez de données pour {name}.")
+        await accueil(update, context)
+        return
+
+    df = compute_indicators(df)
+    signal, score, commentaire = generate_signal_and_score(df)
+    latest = df.iloc[-1]
+
+    result = (
+        f"📊 Résultat pour {name} ({symbol}):\n"
+        f"Prix : {latest['close']:.4f} USDT\n"
+        f"EMA10 : {latest['EMA10']:.4f} | SMA20 : {latest['SMA20']:.4f} | SMA200 : {latest['SMA200']:.4f}\n"
+        f"RSI : {latest['RSI']:.2f} | MACD : {latest['MACD']:.4f} | ADX : {latest['ADX']:.2f}\n"
+        f"Bollinger : [{latest['BB_lower']:.4f} ; {latest['BB_upper']:.4f}]\n"
+        f"Volume actuel : {latest['volume']:.2f} | Moyenne : {latest['volume_mean']:.2f}\n"
+        f"Signal : {signal} | Score : {score:.2f}\n"
+        f"{commentaire}"
+    )
+    await query.edit_message_text(result)
+    await accueil(update, context)
 
 # --- Main ---
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu_"))
+    app.add_handler(CallbackQueryHandler(analyse_token_callback, pattern="^analyse_"))
     logger.info("Bot lancé et en attente de commandes.")
     app.run_polling()
