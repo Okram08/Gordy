@@ -23,6 +23,7 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # Liste des 20 premiers tokens hors stablecoins (2025)
+T# Liste des 50 premiers tokens hors stablecoins (2025)
 TOP_TOKENS = [
     ("bitcoin", "BTCUSDT"),
     ("ethereum", "ETHUSDT"),
@@ -44,6 +45,37 @@ TOP_TOKENS = [
     ("polkadot", "DOTUSDT"),
     ("litecoin", "LTCUSDT"),
     ("polygon", "MATICUSDT"),
+    ("uniswap", "UNIUSDT"),
+    ("filecoin", "FILUSDT"),
+    ("vechain", "VETUSDT"),
+    ("aave", "AAVEUSDT"),
+    ("monero", "XMRUSDT"),
+    ("tezos", "XTZUSDT"),
+    ("cosmos", "ATOMUSDT"),
+    ("fantom", "FTMUSDT"),
+    ("near protocol", "NEARUSDT"),
+    ("internet computer", "ICPUSDT"),
+    ("flow", "FLOWUSDT"),
+    ("eos", "EOSUSDT"),
+    ("elrond", "EGLDUSDT"),
+    ("kusama", "KSMUSDT"),
+    ("chiliz", "CHZUSDT"),
+    ("helium", "HNTUSDT"),
+    ("decentraland", "MANAUSDT"),
+    ("the sandbox", "SANDUSDT"),
+    ("curve dao", "CRVUSDT"),
+    ("maker", "MKRUSDT"),
+    ("optimism", "OPUSDT"),
+    ("arbitrum", "ARBUSDT"),
+    ("raven", "RVNUSDT"),
+    ("quant", "QNTUSDT"),
+    ("1inch", "1INCHUSDT"),
+    ("synthetix", "SNXUSDT"),
+    ("yearn finance", "YFIUSDT"),
+    ("shiba inu", "SHIBUSDT"),
+    ("solana", "SOLUSDT"),
+    ("avalanche", "AVAXUSDT"),
+    ("kusama", "KSMUSDT")
 ]
 
 # --- Analyse ---
