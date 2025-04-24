@@ -15,7 +15,7 @@ dex = ccxt.hyperliquid({
 })
 
 # === Paramètres utilisateur ===
-capital_total = 100         # Capital total à allouer (en USDC)
+capital_total = 50         # Capital total à allouer (en USDC)
 grid_levels = 5             # Nombre de niveaux de la grille
 grid_spacing = 10           # Ecart de prix entre chaque niveau (en USDC)
 symbol = "ETH/USDC:USDC"    # Paire à trader
