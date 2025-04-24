@@ -68,6 +68,9 @@ def get_binance_ohlc(symbol, interval="1h", limit=100):
         return None
 
 def compute_indicators(df):
+    if df["close"].isnull().all() or df["close"].max() == df["close"].min():
+        raise ValueError("Les données sont insuffisantes ou trop similaires pour l'analyse technique.")
+
     df["SMA20"] = ta.trend.sma_indicator(df["close"], window=20)
     df["EMA10"] = ta.trend.ema_indicator(df["close"], window=10)
     df["RSI"] = ta.momentum.rsi(df["close"], window=14)
@@ -125,109 +128,86 @@ def generate_signal_and_score(df):
         commentaire = "Aucun signal clair détecté."
     return signal, score, commentaire
 
-# CONTINUATION...
+# --- Menu retour ---
+def menu_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Nouvelle Analyse", callback_data="analyse")],
+        [InlineKeyboardButton("🏆 Voir Classement", callback_data="classement")]
+    ])
 
 # --- Commandes Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Bienvenue ! Utilisez /analyse pour analyser un token ou /classement pour voir le top des signaux."
+        "👋 Bienvenue ! Utilisez les boutons ci-dessous pour commencer.",
+        reply_markup=menu_keyboard()
     )
-
-async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton(name.title(), callback_data=symbol)]
-        for name, symbol in TOP_TOKENS
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("📊 Sélectionnez une crypto :", reply_markup=reply_markup)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    symbol = query.data
-    name = next((name.title() for name, sym in TOP_TOKENS if sym == symbol), symbol)
-    await query.edit_message_text(text=f"🔍 Analyse de {name} en cours...")
 
-    df = get_binance_ohlc(symbol)
-    if df is None or len(df) < 50:
-        await query.edit_message_text(f"❌ Pas assez de données pour {name}.")
-        return
+    if query.data == "analyse":
+        keyboard = [
+            [InlineKeyboardButton(name.title(), callback_data=symbol)]
+            for name, symbol in TOP_TOKENS
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("📊 Sélectionnez une crypto :", reply_markup=reply_markup)
 
-    df = compute_indicators(df)
-    signal, score, commentaire = generate_signal_and_score(df)
-    latest = df.iloc[-1]
+    elif query.data == "classement":
+        await classement(query, context)
 
-    result = (
-        f"📊 Résultat pour {name} ({symbol}):\n"
-        f"Prix : {latest['close']:.4f} USDT\n"
-        f"EMA10 : {latest['EMA10']:.4f} | SMA20 : {latest['SMA20']:.4f} | SMA200 : {latest['SMA200']:.4f}\n"
-        f"RSI : {latest['RSI']:.2f} | MACD : {latest['MACD']:.4f} | ADX : {latest['ADX']:.2f}\n"
-        f"Bollinger : [{latest['BB_lower']:.4f} ; {latest['BB_upper']:.4f}]\n"
-        f"Volume actuel : {latest['volume']:.2f} | Moyenne : {latest['volume_mean']:.2f}\n"
-        f"Signal : {signal} | Score : {score:.2f}\n"
-        f"{commentaire}"
-    )
-    await query.edit_message_text(result)
+    else:
+        symbol = query.data
+        name = next((name.title() for name, sym in TOP_TOKENS if sym == symbol), symbol)
+        await query.edit_message_text(text=f"🔍 Analyse de {name} en cours...")
 
-async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = await update.message.reply_text("🔎 Analyse des 20 tokens en cours...")
-    results = []
-    progress_msg = ""
+        df = get_binance_ohlc(symbol)
+        if df is None or len(df) < 50:
+            await query.edit_message_text(f"❌ Pas assez de données pour {name}.", reply_markup=menu_keyboard())
+            return
 
-    for idx, (name, symbol) in enumerate(TOP_TOKENS, 1):
         try:
-            df = get_binance_ohlc(symbol)
-            if df is None or len(df) < 50:
-                progress_msg += f"❌ {name.title()} : Données insuffisantes.\n"
-                await message.edit_text(progress_msg)
-                continue
-
             df = compute_indicators(df)
-            signal, score, commentaire = generate_signal_and_score(df)
-            latest = df.iloc[-1]
-
-            if signal != "🤝 HOLD":
-                results.append({
-                    "name": name.title(),
-                    "symbol": symbol,
-                    "signal": signal,
-                    "score": score,
-                    "price": latest["close"],
-                    "commentaire": commentaire
-                })
-                progress_msg += f"✅ {name.title()} : Signal {signal} | Score {score:.2f}\n"
-            else:
-                progress_msg += f"➖ {name.title()} : Aucun signal fort.\n"
-
-            await message.edit_text(progress_msg)
-            await asyncio.sleep(0.3)
         except Exception as e:
-            logger.error(f"Erreur analyse {name}: {e}")
-            progress_msg += f"⚠️ {name.title()} : erreur pendant l'analyse.\n"
-            await message.edit_text(progress_msg)
+            logger.error(f"Erreur calcul indicateurs pour {symbol}: {e}")
+            await query.edit_message_text(f"❌ Analyse impossible pour {name} (erreur: {e}).", reply_markup=menu_keyboard())
+            return
 
-    if not results:
-        await message.edit_text("Aucun signal fort détecté.")
-        return
+        signal, score, commentaire = generate_signal_and_score(df)
+        latest = df.iloc[-1]
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)[:3]
-    final_msg = progress_msg + "\n🏆 Top 3 tokens avec les signaux les plus forts :\n"
-    for i, res in enumerate(results, 1):
-        final_msg += (
-            f"\n{i}. {res['name']} ({res['symbol']})\n"
-            f"   Prix : {res['price']:.4f} USDT\n"
-            f"   Signal : {res['signal']} | Score : {res['score']:.2f}\n"
-            f"   Commentaire : {res['commentaire']}\n"
+        result = (
+            f"📊 Résultat pour {name} ({symbol}):\n"
+            f"Prix : {latest['close']:.4f} USDT\n"
+            f"EMA10 : {latest['EMA10']:.4f} | SMA20 : {latest['SMA20']:.4f} | SMA200 : {latest['SMA200']:.4f}\n"
+            f"RSI : {latest['RSI']:.2f} | MACD : {latest['MACD']:.4f} | ADX : {latest['ADX']:.2f}\n"
+            f"Bollinger : [{latest['BB_lower']:.4f} ; {latest['BB_upper']:.4f}]\n"
+            f"Volume actuel : {latest['volume']:.2f} | Moyenne : {latest['volume_mean']:.2f}\n"
+            f"Signal : {signal} | Score : {score:.2f}\n"
+            f"{commentaire}"
         )
-    await message.edit_text(final_msg)
+        await query.edit_message_text(result, reply_markup=menu_keyboard())
 
-# --- Main ---
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("analyse", analyse))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(CommandHandler("classement", classement))
-    logger.info("Bot lancé et en attente de commandes.")
-    app.run_polling()
+async def classement(query, context):
+    await query.edit_message_text("📈 Classement en cours...")
+    results = []
 
+    for name, symbol in TOP_TOKENS:
+        df = get_binance_ohlc(symbol)
+        if df is None or len(df) < 50:
+            continue
+        try:
+            df = compute_indicators(df)
+        except Exception as e:
+            logger.error(f"Erreur calcul indicateurs pour {symbol}: {e}")
+            continue
+        _, score, _ = generate_signal_and_score(df)
+        results.append((name.title(), symbol, score))
+
+    results.sort(key=lambda x: x[2], reverse=True)
+    classement_text = "🏆 Top 10 cryptos avec meilleur score:\n\n"
+    for i, (name, symbol, score) in enumerate(results[:10], 1):
+        classement_text += f"{i}. {name} ({symbol}) — Score: {score:.2f}\n"
+
+    await query.edit_message_text(classement_text, reply_markup=menu_keyboard())
