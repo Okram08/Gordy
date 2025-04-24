@@ -16,10 +16,6 @@ API_KEY = os.getenv("HL_API_KEY")
 API_SECRET = os.getenv("HL_API_SECRET")
 BASE_URL = "https://api.hyperliquid.xyz"
 
-if not API_KEY or not API_SECRET:
-    print("❌ Clé API ou Secret API introuvable. Vérifie ton fichier .env !")
-    exit(1)
-
 def sign_request(secret, payload):
     return hmac.new(
         secret.encode('utf-8'),
@@ -27,46 +23,48 @@ def sign_request(secret, payload):
         hashlib.sha256
     ).hexdigest()
 
-def get_spot_price(symbol):
-    # Endpoint Hyperliquid pour le prix spot (à adapter selon la doc officielle)
-    url = BASE_URL + "/info"
-    payload = {
-        "type": "spotPrice",
-        "coin": symbol.split('-')[0]
+def get_spot_price_coingecko(symbol):
+    # symbol: "BTC-USDC" -> ids: "bitcoin", vs_currencies: "usd"
+    mapping = {
+        "BTC-USDC": ("bitcoin", "usd"),
+        "ETH-USDC": ("ethereum", "usd"),
+        # Ajoute d'autres mappings si besoin
     }
-    response = requests.post(url, json=payload)
-    data = response.json()
-    # On suppose que le prix spot est dans data['price']
-    price = Decimal(str(data.get('price')))
-    return price
+    ids, vs = mapping.get(symbol, (None, None))
+    if not ids or not vs:
+        raise ValueError("Paire non supportée pour CoinGecko.")
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies={vs}"
+    resp = requests.get(url)
+    if resp.status_code != 200:
+        print("❌ Erreur CoinGecko :", resp.status_code, resp.text)
+        exit(1)
+    price = resp.json()[ids][vs]
+    return Decimal(str(price))
 
 def place_order(symbol, side, price, quantity):
-    endpoint = "/order"  # À adapter selon la doc Hyperliquid
-    url = BASE_URL + endpoint
-
-    timestamp = str(int(time.time() * 1000))
-    body = {
-        "symbol": symbol,
-        "side": side,
-        "price": str(price),
-        "quantity": str(quantity),
-        "timestamp": timestamp
-    }
-    payload = "&".join([f"{k}={v}" for k, v in body.items()])
-    signature = sign_request(API_SECRET, payload)
-    headers = {
-        "API-KEY": API_KEY,
-        "SIGNATURE": signature,
-        "Content-Type": "application/json"
-    }
-    print(f"Envoi de l'ordre: {body}")
-    response = requests.post(url, json=body, headers=headers)
-    try:
-        response.raise_for_status()
-        print("✅ Ordre envoyé avec succès.")
-    except Exception as e:
-        print("❌ Erreur lors de l'envoi de l'ordre:", e)
-    return response.json()
+    # Simulation : Affiche la demande d'ordre, ne l'envoie pas réellement
+    print(f"🟢 [Simulation] Placer ordre {side.upper()} {symbol} à {price} pour {quantity:.6f} {symbol.split('-')[0]}")
+    # Pour un vrai envoi, décommente et adapte selon la doc Hyperliquid :
+    # endpoint = "/order"
+    # url = BASE_URL + endpoint
+    # timestamp = str(int(time.time() * 1000))
+    # body = {
+    #     "symbol": symbol,
+    #     "side": side,
+    #     "price": str(price),
+    #     "quantity": str(quantity),
+    #     "timestamp": timestamp
+    # }
+    # payload = "&".join([f"{k}={v}" for k, v in body.items()])
+    # signature = sign_request(API_SECRET, payload)
+    # headers = {
+    #     "API-KEY": API_KEY,
+    #     "SIGNATURE": signature,
+    #     "Content-Type": "application/json"
+    # }
+    # response = requests.post(url, json=body, headers=headers)
+    # return response.json()
+    return {"status": "simulated", "side": side, "price": float(price), "quantity": float(quantity)}
 
 def build_grid(center_price, levels, spread):
     # Construit une grille centrée sur le prix spot, écartée de +/- spread*100 %
@@ -88,8 +86,13 @@ def main():
     symbol = input("🪙 Quelle paire veux-tu trader ? (ex: BTC-USDC) : ").strip().upper()
     total_capital = Decimal(input("💰 Capital à allouer (en USDC) : "))
 
-    # Récupère le prix spot automatiquement
-    spot_price = get_spot_price(symbol)
+    # Récupère le prix spot automatiquement via CoinGecko
+    try:
+        spot_price = get_spot_price_coingecko(symbol)
+    except Exception as e:
+        print(f"❌ Impossible de récupérer le prix spot pour {symbol} : {e}")
+        return
+
     print(f"📈 Prix spot actuel pour {symbol} : {spot_price} USDC")
 
     # Construit la grille automatiquement autour du prix spot
@@ -110,7 +113,7 @@ def main():
         price = grid[i]
         quantity = float(allocations[i]) / float(price)
         result = place_order(symbol, "buy", price, quantity)
-        print("Réponse API :", result)
+        print("Réponse :", result)
         time.sleep(1)
 
 if __name__ == "__main__":
