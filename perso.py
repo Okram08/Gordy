@@ -70,7 +70,6 @@ def compute_indicators(df):
     df = df.copy()
     for col in ["close", "high", "low", "volume"]:
         df[col] = df[col].ffill().bfill()
-    # Calcul des indicateurs avec Pandas et ta, sans min_periods pour ta
     df["SMA20"] = df["close"].rolling(window=20, min_periods=1).mean()
     df["EMA10"] = ta.trend.ema_indicator(df["close"], window=10)
     df["RSI"] = ta.momentum.rsi(df["close"], window=14)
@@ -87,7 +86,6 @@ def compute_indicators(df):
 
 def generate_signal_and_score(df):
     latest = df.iloc[-1]
-    # Sécurité pour éviter les NaN dans les calculs
     for key in ["SMA200", "BB_upper", "BB_lower"]:
         if pd.isna(latest[key]):
             latest[key] = latest["close"]
@@ -126,11 +124,18 @@ def generate_signal_and_score(df):
     if latest["volume"] > 1.2 * latest["volume_mean"]:
         score_sell += 1
 
-    # Seuil : 4 critères sur 7 suffisent pour un signal fort
+    # Calcul de la note de confiance
     if score_buy >= 4 and score_buy >= score_sell:
         signal = "📈 BUY"
         score = score_buy
         commentaire = f"Signal d'achat ({score_buy}/7 critères validés)."
+        confiance = int((score_buy / 7) * 10)
+        confiance_txt = (
+            "Forte" if score_buy >= 6 else
+            "Bonne" if score_buy == 5 else
+            "Moyenne" if score_buy == 4 else
+            "Faible"
+        )
         entry = latest["close"]
         sma200 = latest["SMA200"] if not pd.isna(latest["SMA200"]) else entry
         bb_upper = latest["BB_upper"] if not pd.isna(latest["BB_upper"]) else entry
@@ -144,6 +149,13 @@ def generate_signal_and_score(df):
         signal = "📉 SELL"
         score = score_sell
         commentaire = f"Signal de vente ({score_sell}/7 critères validés)."
+        confiance = int((score_sell / 7) * 10)
+        confiance_txt = (
+            "Forte" if score_sell >= 6 else
+            "Bonne" if score_sell == 5 else
+            "Moyenne" if score_sell == 4 else
+            "Faible"
+        )
         entry = latest["close"]
         sma200 = latest["SMA200"] if not pd.isna(latest["SMA200"]) else entry
         bb_lower = latest["BB_lower"] if not pd.isna(latest["BB_lower"]) else entry
@@ -157,10 +169,12 @@ def generate_signal_and_score(df):
         signal = "🤝 HOLD"
         score = max(score_buy, score_sell)
         commentaire = "Aucun signal fort. Tendance neutre ou mitigée."
+        confiance = int((score / 7) * 10)
+        confiance_txt = "Faible"
         stop_loss = None
         take_profit = None
 
-    return signal, score, commentaire, stop_loss, take_profit
+    return signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt
 
 async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -224,7 +238,7 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 continue
 
             df = compute_indicators(df)
-            signal, score, commentaire, stop_loss, take_profit = generate_signal_and_score(df)
+            signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt = generate_signal_and_score(df)
             latest = df.iloc[-1]
 
             if signal != "🤝 HOLD":
@@ -234,9 +248,14 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "signal": signal,
                     "score": score,
                     "price": latest["close"],
-                    "commentaire": commentaire
+                    "commentaire": commentaire,
+                    "confiance": confiance,
+                    "confiance_txt": confiance_txt
                 })
-                progress_msg += f"✅ {name.title()} : Signal {signal} | Score {score}/7\n"
+                progress_msg += (
+                    f"✅ {name.title()} : Signal {signal} | Score {score}/7 | "
+                    f"Confiance {confiance}/10 ({confiance_txt})\n"
+                )
             else:
                 progress_msg += f"➖ {name.title()} : Aucun signal fort.\n"
 
@@ -248,17 +267,25 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await context.bot.edit_message_text(progress_msg, chat_id=chat_id, message_id=message.message_id)
 
     if not results:
-        await context.bot.edit_message_text("Aucun signal fort détecté.", chat_id=chat_id, message_id=message.message_id)
+        await context.bot.edit_message_text(
+            "Aucun signal fort détecté.", chat_id=chat_id, message_id=message.message_id
+        )
         await accueil(update, context)
         return
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)[:3]
-    final_msg = progress_msg + "\n*🏆 Top 3 tokens avec les signaux les plus forts :*\n"
+    # Tri décroissant par score, puis confiance, puis nom
+    results = sorted(
+        results,
+        key=lambda x: (-x["score"], -x["confiance"], x["name"])
+    )
+
+    final_msg = progress_msg + "\n*🏆 Classement des tokens avec signal fort :*\n"
     for i, res in enumerate(results, 1):
         final_msg += (
             f"\n*{i}. {res['name']}* (`{res['symbol']}`)\n"
             f"   Prix : `{res['price']:.4f}` USDT\n"
             f"   Signal : {res['signal']} | Score : `{res['score']}/7`\n"
+            f"   Confiance : `{res['confiance']}/10` ({res['confiance_txt']})\n"
             f"   _{res['commentaire']}_\n"
         )
     keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]]
@@ -295,7 +322,7 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     df = compute_indicators(df)
-    signal, score, commentaire, stop_loss, take_profit = generate_signal_and_score(df)
+    signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt = generate_signal_and_score(df)
     latest = df.iloc[-1]
 
     result = (
@@ -306,6 +333,7 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         f"*Bollinger* : [`{latest['BB_lower']:.4f}` ; `{latest['BB_upper']:.4f}`]\n"
         f"*Volume actuel* : `{latest['volume']:.2f}` | *Moyenne* : `{latest['volume_mean']:.2f}`\n"
         f"*Signal* : {signal} | *Score* : `{score}/7`\n"
+        f"*Note de confiance* : `{confiance}/10` ({confiance_txt})\n"
         f"_{commentaire}_\n"
     )
     if signal in ["📈 BUY", "📉 SELL"]:
