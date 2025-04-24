@@ -252,7 +252,10 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "confiance": confiance,
                     "confiance_txt": confiance_txt
                 })
-                progress_msg += f"✅ {name.title()} : Signal {signal} | Score {score}/7 | Confiance {confiance}/10 ({confiance_txt})\n"
+                progress_msg += (
+                    f"✅ {name.title()} : Signal {signal} | Score {score}/7 | "
+                    f"Confiance {confiance}/10 ({confiance_txt})\n"
+                )
             else:
                 progress_msg += f"➖ {name.title()} : Aucun signal fort.\n"
 
@@ -264,12 +267,19 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await context.bot.edit_message_text(progress_msg, chat_id=chat_id, message_id=message.message_id)
 
     if not results:
-        await context.bot.edit_message_text("Aucun signal fort détecté.", chat_id=chat_id, message_id=message.message_id)
+        await context.bot.edit_message_text(
+            "Aucun signal fort détecté.", chat_id=chat_id, message_id=message.message_id
+        )
         await accueil(update, context)
         return
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)[:3]
-    final_msg = progress_msg + "\n*🏆 Top 3 tokens avec les signaux les plus forts :*\n"
+    # Tri décroissant par score, puis confiance, puis nom
+    results = sorted(
+        results,
+        key=lambda x: (-x["score"], -x["confiance"], x["name"])
+    )
+
+    final_msg = progress_msg + "\n*🏆 Classement des tokens avec signal fort :*\n"
     for i, res in enumerate(results, 1):
         final_msg += (
             f"\n*{i}. {res['name']}* (`{res['symbol']}`)\n"
