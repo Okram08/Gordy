@@ -1,43 +1,21 @@
-import os
-import requests
-from dotenv import load_dotenv
+from hyperliquid.info import Info
+from hyperliquid.utils import constants
 
-# Charger les variables d'environnement
-load_dotenv()
-WALLET_ADDRESS = os.getenv("HL_WALLET_ADDRESS")
+# Remplace cette adresse par l'adresse Ethereum de l'utilisateur dont tu veux voir le solde
+user_address = "0xb289ee20cd31C74cC73759f215336A2454488d8f"
 
-def get_spot_balance():
-    """Récupère le solde USDC SPOT via l'API native Hyperliquid"""
-    url = "https://api.hyperliquid.xyz/info"
-    payload = {
-        "type": "spotClearinghouseState",
-        "user": WALLET_ADDRESS
-    }
-    headers = {
-        "Content-Type": "application/json"
-    }
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            for asset in data.get("balances", []):
-                if asset.get("coin") == "USDC":
-                    # La valeur 'total' est une string, on la convertit en float
-                    return float(asset.get("total", "0"))
-            return 0.0
-        else:
-            print(f"Erreur HTTP {response.status_code}: {response.text}")
-            return 0.0
-    except Exception as e:
-        print(f"Erreur API: {e}")
-        return 0.0
+# Utilise l'URL de l'API principale (mainnet)
+info = Info(constants.MAINNET_API_URL, skip_ws=True)
 
-def main():
-    if not WALLET_ADDRESS or len(WALLET_ADDRESS) != 42 or not WALLET_ADDRESS.startswith("0x"):
-        print("Adresse de wallet non renseignée ou invalide.")
-        return
-    solde_usdc = get_spot_balance()
-    print(f"Votre solde SPOT USDC : {solde_usdc:.6f}")
+# Récupère l'état du clearinghouse spot pour l'utilisateur
+user_state = info.user_state(user_address)
 
-if __name__ == "__main__":
-    main()
+# Affiche les soldes
+if "spotBalances" in user_state:
+    print("Balances spot pour l'utilisateur", user_address)
+    for balance in user_state["spotBalances"]:
+        coin = balance.get("coin")
+        total = balance.get("total")
+        print(f"{coin}: {total}")
+else:
+    print("Aucun solde spot trouvé pour cet utilisateur.")
