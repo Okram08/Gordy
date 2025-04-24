@@ -1,92 +1,105 @@
 import os
+import json
+import time
 import requests
 from dotenv import load_dotenv
+from eth_account import Account
+from web3 import Web3
 
-# Charger l'adresse publique depuis .env
+# Charger les variables d'environnement
 load_dotenv()
 wallet_address = os.getenv("HL_WALLET_ADDRESS")
+private_key = os.getenv("HL_PRIVATE_KEY")
 
-# Paramètres utilisateur
-capital_total = 89              # Capital total à allouer (en USDC)
-grid_levels = 3                 # Nombre de niveaux de la grille
-grid_spacing = 10               # Ecart de prix entre chaque niveau (en USDC)
-symbol = "ETH-USDC"             # Paire à trader (SPOT, format natif Hyperliquid)
-pourcentage_par_grille = 0.15   # % du capital à allouer à chaque grille (ex: 0.15 = 15%)
-min_order_value = 10            # Minimum requis par Hyperliquid (en USDC)
+# Configuration Hyperliquid
+BASE_URL = "https://api.hyperliquid.xyz"
+CHAIN_ID = 1  # Mainnet
 
-def get_spot_balance(address):
-    url = "https://api.hyperliquid.xyz/info"
+def get_nonce():
+    return int(time.time() * 1000)
+
+def sign_message(message, private_key):
+    account = Account.from_key(private_key)
+    signature = account.sign_message(message)
+    return signature.signature.hex()
+
+def get_spot_balance():
+    url = f"{BASE_URL}/info"
     payload = {
         "type": "spotUser",
-        "user": address
+        "user": wallet_address
     }
-    resp = requests.post(url, json=payload)
-    data = resp.json()
-    # Structure attendue : {'assetPositions':[{'coin':'USDC','position':'89.0'}, ...]}
-    usdc = 0.0
-    if "assetPositions" in data:
-        for asset in data["assetPositions"]:
+    response = requests.post(url, json=payload)
+    
+    if response.status_code == 200:
+        data = response.json()
+        for asset in data.get("assetPositions", []):
             if asset["coin"] == "USDC":
-                usdc = float(asset["position"])
-    return usdc, data
+                return float(asset["position"])
+    return 0.0
 
-def get_spot_price(symbol):
-    url = "https://api.hyperliquid.xyz/info"
-    payload = {
-        "type": "spotPx",
-        "coin": symbol.split('-')[0]
+def place_spot_order(side, coin, sz, px):
+    nonce = get_nonce()
+    order = {
+        "type": "order",
+        "nonce": nonce,
+        "coin": coin,
+        "sz": str(sz),
+        "price": str(px),
+        "side": side,
+        "isPostOnly": False
     }
-    resp = requests.post(url, json=payload)
-    data = resp.json()
-    # Structure attendue : {'spotPx': 1745.65, ...}
-    return float(data["spotPx"])
+    
+    signature = sign_message(str(nonce), private_key)
+    
+    headers = {
+        "Content-Type": "application/json",
+        "X-Signature": signature,
+        "X-Wallet-Address": wallet_address
+    }
+    
+    response = requests.post(
+        f"{BASE_URL}/exchange",
+        headers=headers,
+        json=order
+    )
+    
+    return response.json()
 
-def main():
-    # Lire le solde spot USDC
-    usdc_dispo, raw_balance = get_spot_balance(wallet_address)
-    print(f"\n[DEBUG] Structure complète du solde spot :\n{raw_balance}\n")
-    print(f"Solde USDC spot disponible : {usdc_dispo:.2f} USDC")
-
-    # Calcul des ordres grid
-    base_price = get_spot_price(symbol)
-    print(f"Prix spot de référence : {base_price:.2f} USDC")
-
-    usdc_par_ordre = capital_total * pourcentage_par_grille
-    if usdc_par_ordre < min_order_value:
-        print(f"ATTENTION : Le montant par grille ({usdc_par_ordre:.2f}$) est inférieur au minimum requis ({min_order_value}$)")
-        print("Augmente le capital, le pourcentage, ou diminue le nombre de grilles.")
+def grid_trading_bot():
+    symbol = "ETH"  # Paire SPOT ETH/USDC
+    capital_total = get_spot_balance()
+    grid_levels = 3
+    grid_spacing = 10  # 10 USDC d'écart
+    allocation_per_grid = 0.2  # 20% du capital par grille
+    
+    print(f"Solde SPOT disponible: {capital_total:.2f} USDC")
+    
+    if capital_total < 50:
+        print("Fonds insuffisants. Minimum 50 USDC requis.")
         return
-
-    amount = usdc_par_ordre / base_price  # Quantité d'ETH par ordre
-    nombre_ordres = grid_levels * 2
-    capital_requis = usdc_par_ordre * nombre_ordres
-
-    print(f"Capital requis pour la grille : {capital_requis:.2f} USDC")
-    if usdc_dispo < capital_requis:
-        print("ERREUR : Solde insuffisant pour placer tous les ordres de la grille !")
-        print("Dépose plus de fonds ou réduis le capital total / nombre de grilles.")
-        return
-
-    print(f"Capital total utilisé : {capital_total} USDC")
-    print(f"Nombre de niveaux : {grid_levels}")
-    print(f"Pourcentage par grille : {pourcentage_par_grille*100:.1f}%")
-    print(f"Montant par grille : {usdc_par_ordre:.2f} USDC")
-    print(f"Quantité par ordre : {amount:.6f} ETH\n")
-
-    # Afficher les ordres à placer
+    
+    # Calcul des paramètres
+    price = float(requests.get(f"{BASE_URL}/spotPx?coin=ETH").json()["spotPx"])
+    usdc_per_order = capital_total * allocation_per_grid
+    eth_per_order = usdc_per_order / price
+    
+    print(f"Prix actuel: {price:.2f} USDC")
+    print(f"Quantité par ordre: {eth_per_order:.4f} ETH")
+    
+    # Placement des ordres
     for i in range(1, grid_levels + 1):
-        buy_price = round(base_price - i * grid_spacing, 2)
-        sell_price = round(base_price + i * grid_spacing, 2)
-
-        if (amount * buy_price) >= min_order_value:
-            print(f"[A placer] Ordre BUY à {buy_price} USDC pour {amount:.6f} ETH (~{amount*buy_price:.2f} USDC)")
-        else:
-            print(f"Ordre BUY à {buy_price} ignoré (valeur < 10$)")
-
-        if (amount * sell_price) >= min_order_value:
-            print(f"[A placer] Ordre SELL à {sell_price} USDC pour {amount:.6f} ETH (~{amount*sell_price:.2f} USDC)")
-        else:
-            print(f"Ordre SELL à {sell_price} ignoré (valeur < 10$)")
-
+        buy_price = round(price - (i * grid_spacing), 2)
+        sell_price = round(price + (i * grid_spacing), 2)
+        
+        # Ordre d'achat
+        if buy_price > 0:
+            print(f"Placing BUY order @ {buy_price} USDC")
+            print(place_spot_order("B", "ETH", eth_per_order, buy_price))
+        
+        # Ordre de vente
+        print(f"Placing SELL order @ {sell_price} USDC") 
+        print(place_spot_order("S", "ETH", eth_per_order, sell_price))
+        
 if __name__ == "__main__":
-    main()
+    grid_trading_bot()
