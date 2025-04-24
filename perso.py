@@ -6,8 +6,7 @@ import ta
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
-    ConversationHandler, filters
+    ApplicationBuilder, CommandHandler, ContextTypes,
 )
 
 # --- Logging configuration ---
@@ -21,24 +20,29 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# --- Conversation state ---
-ASK_TOKEN = 1
-
-# --- Utilitaires Binance ---
-def get_binance_symbols():
-    """Récupère tous les symboles de trading disponibles sur Binance."""
-    url = "https://api.binance.com/api/v3/exchangeInfo"
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        symbols = data["symbols"]
-        # Crée un mapping {baseAsset.lower(): symbol} pour les paires contre USDT
-        mapping = {s["baseAsset"].lower(): s["symbol"] for s in symbols if s["quoteAsset"] == "USDT" and s["status"] == "TRADING"}
-        return mapping
-    except Exception as e:
-        logger.error(f"Erreur récupération des symboles Binance : {e}")
-        return {}
+# Liste des 20 premiers tokens hors stablecoins (2025)
+TOP_TOKENS = [
+    ("bitcoin", "BTCUSDT"),
+    ("ethereum", "ETHUSDT"),
+    ("ripple", "XRPUSDT"),
+    ("bnb", "BNBUSDT"),
+    ("solana", "SOLUSDT"),
+    ("dogecoin", "DOGEUSDT"),
+    ("cardano", "ADAUSDT"),
+    ("tron", "TRXUSDT"),
+    ("sui", "SUIUSDT"),
+    ("chainlink", "LINKUSDT"),
+    ("avalanche", "AVAXUSDT"),
+    ("stellar", "XLMUSDT"),
+    ("leo", "LEOUSDT"),
+    ("shiba inu", "SHIBUSDT"),
+    ("toncoin", "TONUSDT"),
+    ("hedera", "HBARUSDT"),
+    ("bitcoin cash", "BCHUSDT"),
+    ("polkadot", "DOTUSDT"),
+    ("litecoin", "LTCUSDT"),
+    ("polygon", "MATICUSDT"),
+]
 
 def get_binance_ohlc(symbol, interval="1h", limit=48):
     url = "https://api.binance.com/api/v3/klines"
@@ -70,90 +74,66 @@ def compute_indicators(df):
     df["BB_lower"] = bb.bollinger_lband()
     return df
 
-def generate_signal(df):
+def generate_signal_and_score(df):
     latest = df.iloc[-1]
+    score = 0
+    # Signal
     if (
         latest["EMA10"] > latest["SMA20"] and
-        latest["RSI"] < 30 and
+        latest["RSI"] < 35 and
         latest["close"] < latest["BB_lower"]
     ):
-        return "BUY"
+        signal = "BUY"
+        score += abs(latest["EMA10"] - latest["SMA20"])
+        score += max(0, 35 - latest["RSI"])
     elif (
         latest["EMA10"] < latest["SMA20"] and
-        latest["RSI"] > 70 and
+        latest["RSI"] > 65 and
         latest["close"] > latest["BB_upper"]
     ):
-        return "SELL"
+        signal = "SELL"
+        score += abs(latest["EMA10"] - latest["SMA20"])
+        score += max(0, latest["RSI"] - 65)
     else:
-        return "HOLD"
+        signal = "HOLD"
+        score = 0
+    return signal, score
 
-# --- Telegram Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"User {update.effective_user.id} started the bot.")
-    await update.message.reply_text(
-        "Bienvenue ! Envoie-moi le nom du token (ex: bitcoin, ethereum, solana, pepe...) que tu veux analyser."
-    )
-    return ASK_TOKEN
-
-async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    token_name = update.message.text.strip().lower()
-    logger.info(f"User {update.effective_user.id} demande analyse pour: {token_name}")
-
-    # Récupère la liste des symboles Binance (cache en mémoire pour éviter trop de requêtes)
-    if not hasattr(ask_token, "symbol_mapping"):
-        ask_token.symbol_mapping = get_binance_symbols()
-
-    symbol_mapping = ask_token.symbol_mapping
-
-    if token_name not in symbol_mapping:
-        await update.message.reply_text(
-            f"Token '{token_name}' non trouvé ou non disponible contre USDT sur Binance.\n"
-            "Essaie par exemple : bitcoin, ethereum, solana, pepe, dogecoin, etc."
+async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Analyse des 20 premiers tokens (hors stablecoins)...")
+    results = []
+    for name, symbol in TOP_TOKENS:
+        df = get_binance_ohlc(symbol)
+        if df is None or len(df) < 21:
+            continue
+        df = compute_indicators(df)
+        signal, score = generate_signal_and_score(df)
+        if signal != "HOLD":
+            results.append({
+                "name": name.title(),
+                "symbol": symbol,
+                "signal": signal,
+                "score": score,
+                "price": df.iloc[-1]["close"]
+            })
+    if not results:
+        await update.message.reply_text("Aucun signal fort détecté sur les 20 premiers tokens.")
+        return
+    # Classement par score décroissant
+    results = sorted(results, key=lambda x: x["score"], reverse=True)
+    top3 = results[:3]
+    msg = "Top 3 tokens avec les signaux les plus forts :\n"
+    for i, res in enumerate(top3, 1):
+        msg += (
+            f"\n{i}. {res['name']} ({res['symbol']})\n"
+            f"   Prix : {res['price']:.4f} USDT\n"
+            f"   Signal : {res['signal']}\n"
+            f"   Score : {res['score']:.2f}\n"
         )
-        logger.warning(f"Token non trouvé : {token_name}")
-        return ConversationHandler.END
-
-    symbol = symbol_mapping[token_name]
-    df = get_binance_ohlc(symbol)
-    if df is None or len(df) < 21:
-        await update.message.reply_text(
-            f"Impossible de récupérer suffisamment de données pour {token_name.upper()} ({symbol})."
-        )
-        logger.warning(f"Echec récupération données pour {symbol}")
-        return ConversationHandler.END
-
-    df = compute_indicators(df)
-    signal = generate_signal(df)
-    latest = df.iloc[-1]
-    await update.message.reply_text(
-        f"Analyse pour '{token_name.upper()}' ({symbol}):\n"
-        f"Prix actuel : {latest['close']:.4f} USDT\n"
-        f"EMA10 : {latest['EMA10']:.4f}\n"
-        f"SMA20 : {latest['SMA20']:.4f}\n"
-        f"RSI : {latest['RSI']:.2f}\n"
-        f"Bollinger Lower : {latest['BB_lower']:.4f}\n"
-        f"Bollinger Upper : {latest['BB_upper']:.4f}\n"
-        f"Signal sur 24h : {signal}"
-    )
-    logger.info(f"Analyse envoyée pour {token_name.upper()} - Signal: {signal}")
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Opération annulée.")
-    logger.info(f"User {update.effective_user.id} a annulé l'opération.")
-    return ConversationHandler.END
+    await update.message.reply_text(msg)
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("classement", classement))
     logger.info("Bot lancé et en attente de commandes.")
     app.run_polling()
