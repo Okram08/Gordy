@@ -1,45 +1,70 @@
-import requests
+import os
 import json
+import requests
+from dotenv import load_dotenv
+from decimal import Decimal
+
+# Charger le .env
+load_dotenv()
+
+WALLET_ADDRESS = os.getenv("HL_WALLET_ADDRESS")
+PRIVATE_KEY = os.getenv("HL_PRIVATE_KEY")  # Pas encore utilisé ici
+
+# API URL
+HL_API_URL = "https://api.hyperliquid.xyz/info"
 
 def get_spot_balance(address):
-    # URL de l'API
-    url = "https://api.hyperliquid.xyz/info"
-    
-    # Corps de la requête
     payload = {
         "type": "spotClearinghouseState",
         "user": address
     }
-    
-    # Headers
-    headers = {
-        "Content-Type": "application/json"
-    }
-    
+
     try:
-        # Envoi de la requête POST
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        
-        # Vérification du statut de la réponse
-        if response.status_code == 200:
-            # Traitement de la réponse
-            data = response.json()
-            
-            # Affichage des balances
-            if "balances" in data:
-                print(f"Balances spot pour l'utilisateur {address}:")
-                for balance in data["balances"]:
-                    coin = balance.get("coin")
-                    total = balance.get("total")
-                    print(f"{coin}: {total}")
-            else:
-                print("Aucun solde spot trouvé pour cet utilisateur.")
-        else:
-            print(f"Erreur {response.status_code}: {response.text}")
+        response = requests.post(HL_API_URL, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("balances", [])
     except Exception as e:
-        print(f"Erreur lors de la requête : {e}")
+        print(f"❌ Erreur lors de la requête : {e}")
+        return []
 
-# Remplace cette adresse par celle dont tu veux voir le solde
-user_address = "0x1AC2c9EcAC672Db143bCaa37B75aCe154256e372"
+def build_grid(start_price, end_price, levels):
+    step = (end_price - start_price) / (levels - 1)
+    return [round(start_price + i * step, 4) for i in range(levels)]
 
-get_spot_balance(user_address)
+def distribute_capital(capital, levels, allocation_type="equal"):
+    if allocation_type == "equal":
+        amount_per_level = capital / levels
+        return [round(amount_per_level, 2)] * levels
+    # Tu peux implémenter des répartitions personnalisées ici
+    return []
+
+def main():
+    print("🔁 Lancement du Grid Trading Bot...")
+
+    # Lire le solde
+    balances = get_spot_balance(WALLET_ADDRESS)
+    usdc_balance = next((Decimal(b["total"]) for b in balances if b["coin"] == "USDC"), Decimal("0"))
+    print(f"💵 Solde USDC disponible : {usdc_balance} USDC")
+
+    # Définir les paramètres de la grille
+    total_capital = Decimal(input("💰 Capital à allouer (USDC) : "))
+    start_price = Decimal(input("📈 Prix minimum : "))
+    end_price = Decimal(input("📉 Prix maximum : "))
+    levels = int(input("📊 Nombre de grilles : "))
+
+    if total_capital > usdc_balance:
+        print("❗ Capital supérieur à ton solde. Abandon.")
+        return
+
+    grid = build_grid(start_price, end_price, levels)
+    allocations = distribute_capital(total_capital, levels)
+
+    print("\n📋 Stratégie Grid Trading :")
+    for i in range(levels):
+        print(f"Grille {i+1}: Prix {grid[i]} USDC → Allocation {allocations[i]} USDC")
+
+    # Prochaine étape : placer les ordres spot ici via l’API (à discuter 😉)
+
+if __name__ == "__main__":
+    main()
