@@ -68,17 +68,14 @@ def get_binance_ohlc(symbol, interval="1h", limit=100):
         return None
 
 def compute_indicators(df):
-    if df["close"].isnull().all() or df["close"].max() == df["close"].min():
-        raise ValueError("Les données sont insuffisantes ou trop similaires pour l'analyse technique.")
-
-    df["SMA20"] = ta.trend.sma_indicator(df["close"], window=20)
-    df["EMA10"] = ta.trend.ema_indicator(df["close"], window=10)
-    df["RSI"] = ta.momentum.rsi(df["close"], window=14)
-    df["SMA200"] = ta.trend.sma_indicator(df["close"], window=200)
-    df["MACD"] = ta.trend.macd_diff(df["close"])
-    df["ADX"] = ta.trend.adx(df["high"], df["low"], df["close"], window=14)
+    df["SMA20"] = ta.trend.SMAIndicator(close=df["close"], window=20).sma_indicator()
+    df["EMA10"] = ta.trend.EMAIndicator(close=df["close"], window=10).ema_indicator()
+    df["RSI"] = ta.momentum.RSIIndicator(close=df["close"], window=14).rsi()
+    df["SMA200"] = ta.trend.SMAIndicator(close=df["close"], window=200).sma_indicator()
+    df["MACD"] = ta.trend.MACD(close=df["close"]).macd_diff()
+    df["ADX"] = ta.trend.ADXIndicator(high=df["high"], low=df["low"], close=df["close"], window=14).adx()
     df["volume_mean"] = df["volume"].rolling(window=20).mean()
-    bb = ta.volatility.BollingerBands(df["close"], window=20, window_dev=2)
+    bb = ta.volatility.BollingerBands(close=df["close"], window=20, window_dev=2)
     df["BB_upper"] = bb.bollinger_hband()
     df["BB_lower"] = bb.bollinger_lband()
     return df
@@ -167,13 +164,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"❌ Pas assez de données pour {name}.", reply_markup=menu_keyboard())
             return
 
-        try:
-            df = compute_indicators(df)
-        except Exception as e:
-            logger.error(f"Erreur calcul indicateurs pour {symbol}: {e}")
-            await query.edit_message_text(f"❌ Analyse impossible pour {name} (erreur: {e}).", reply_markup=menu_keyboard())
-            return
-
+        df = compute_indicators(df)
         signal, score, commentaire = generate_signal_and_score(df)
         latest = df.iloc[-1]
 
@@ -197,11 +188,7 @@ async def classement(query, context):
         df = get_binance_ohlc(symbol)
         if df is None or len(df) < 50:
             continue
-        try:
-            df = compute_indicators(df)
-        except Exception as e:
-            logger.error(f"Erreur calcul indicateurs pour {symbol}: {e}")
-            continue
+        df = compute_indicators(df)
         _, score, _ = generate_signal_and_score(df)
         results.append((name.title(), symbol, score))
 
