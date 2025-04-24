@@ -53,7 +53,7 @@ def get_binance_ohlc(symbol, interval="1h", limit=100):
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
-        df = pd.DataFrame(data, columns=[
+        df = pd.DataFrame(data, columns=[ 
             "open_time", "open", "high", "low", "close", "volume",
             "close_time", "quote_asset_volume", "number_of_trades",
             "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
@@ -142,11 +142,11 @@ async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    symbol = query.data
+    symbol = query.data  # Le symbole correct, ex: 'BTCUSDT' ou 'ETHUSDT'
     name = next((name.title() for name, sym in TOP_TOKENS if sym == symbol), symbol)
     await query.edit_message_text(text=f"🔍 Analyse de {name} en cours...")
 
-    df = get_binance_ohlc(symbol)
+    df = get_binance_ohlc(symbol)  # Utiliser directement le symbole ici
     if df is None or len(df) < 50:
         await query.edit_message_text(f"❌ Pas assez de données pour {name}.")
         return
@@ -226,14 +226,6 @@ async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"   Commentaire : {res['commentaire']}\n"
         )
     await message.edit_text(final_msg)
-
-    # Ajout des boutons pour relancer une analyse ou revenir à l'accueil
-    keyboard = [
-        [InlineKeyboardButton("Faire une nouvelle analyse", callback_data="analyse")],
-        [InlineKeyboardButton("Retour à l'accueil", callback_data="start")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await message.reply_text("🔄 Que souhaitez-vous faire maintenant ?", reply_markup=reply_markup)
 
 # --- Main ---
 if __name__ == "__main__":
