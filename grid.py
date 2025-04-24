@@ -1,204 +1,69 @@
 import os
-import time
-import asyncio
-import requests
-import logging
 from dotenv import load_dotenv
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, ContextTypes
-from apscheduler.schedulers.background import BackgroundScheduler
-from pytz import utc
+import ccxt
 
-# --- CONFIGURATION ---
+# Charger les variables d'environnement
 load_dotenv()
-API_URL = "https://api.hyperliquid.xyz"
-HEADERS = {"Content-Type": "application/json"}
-GRID_LEVELS = int(os.getenv("GRID_LEVELS", 5))
-GRID_STEP_PCT = float(os.getenv("GRID_STEP_PCT", 0.005))  # 0.5% par défaut
-CHECK_INTERVAL = int(os.getenv("ANALYSIS_INTERVAL", 60))  # 60s par défaut
+wallet_address = os.getenv("HL_WALLET_ADDRESS")
+private_key = os.getenv("HL_PRIVATE_KEY")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Initialiser la connexion à Hyperliquid via ccxt
+dex = ccxt.hyperliquid({
+    "walletAddress": wallet_address,
+    "privateKey": private_key,
+})
 
-# --- FONCTIONS API HYPERLIQUID ---
+# === Paramètres utilisateur ===
+capital_total = 100         # Capital total à allouer (en USDC)
+grid_levels = 5             # Nombre de niveaux de la grille
+grid_spacing = 10           # Ecart de prix entre chaque niveau (en USDC)
+symbol = "ETH/USDC:USDC"    # Paire à trader
 
-def get_spot_meta_and_prices():
-    resp = requests.post(f"{API_URL}/info", json={"type": "spotMetaAndAssetCtxs"}, headers=HEADERS)
-    data = resp.json()
-    spot_meta = data[0]["universe"]  # Liste des paires spot
-    spot_ctxs = data[1]              # Liste des contextes, avec prix
-    # Associe chaque paire à son contexte (prix, volume, etc.)
-    meta_by_index = {pair["index"]: pair for pair in spot_meta}
-    ctx_by_index = {ctx["a"]: ctx for ctx in spot_ctxs}
-    pairs = []
-    for idx, pair in meta_by_index.items():
-        ctx = ctx_by_index.get(idx)
-        if ctx and "markPx" in ctx:
-            pair_info = {
-                "name": pair["name"],
-                "index": idx,
-                "price": float(ctx["markPx"]),
-                "volume": float(ctx.get("dayNtlVlm", 0))
-            }
-            pairs.append(pair_info)
-    return pairs
+def get_mid_price(symbol):
+    """Récupère le prix médian du marché"""
+    markets = dex.load_markets()
+    return float(markets[symbol]["info"]["midPx"])
 
-def get_asset_id(spot_index):
-    return 10000 + spot_index
+def place_grid_orders():
+    base_price = get_mid_price(symbol)
+    print(f"Prix de référence : {base_price:.2f} USDC")
 
-def build_spot_order_payload(asset_id, is_buy, price, size, api_key, signature, nonce):
-    payload = {
-        "action": {
-            "type": "order",
-            "orders": [{
-                "a": asset_id,
-                "b": is_buy,
-                "p": str(price),
-                "s": str(size),
-                "r": False,
-                "t": {"limit": {"tif": "Gtc"}}
-            }]
-        },
-        "nonce": nonce,
-        "signature": signature,      # À générer avec le SDK officiel
-        "X-API-KEY": api_key
-    }
-    return payload
+    nombre_ordres = grid_levels * 2
+    usdc_par_ordre = capital_total / nombre_ordres
+    amount = usdc_par_ordre / base_price  # Quantité d'ETH par ordre
 
-def place_spot_order(payload):
-    resp = requests.post(f"{API_URL}/exchange", json=payload, headers=HEADERS)
-    return resp.json()
+    print(f"Capital total utilisé : {capital_total} USDC")
+    print(f"Nombre de niveaux : {grid_levels}")
+    print(f"Quantité par ordre : {amount:.6f} ETH")
 
-# --- BOT GRID TRADING ---
+    for i in range(1, grid_levels + 1):
+        buy_price = round(base_price - i * grid_spacing, 2)
+        sell_price = round(base_price + i * grid_spacing, 2)
 
-class HyperliquidSpotGridBot:
-    def __init__(self):
-        self.tg_bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        self.scheduler = BackgroundScheduler(timezone=utc)
-        self.scheduler.start()
-        self.selected_pair = None
-        self.grid_orders = []
-        self.running = True
-
-    def send_alert(self, message):
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(
-                self.tg_bot.send_message(
-                    chat_id=self.chat_id,
-                    text=f"🚨 HyperGrid Spot Bot:\n{message}"
-                )
-            )
-        except Exception as e:
-            logger.error(f"Erreur envoi Telegram: {str(e)}")
-
-    def select_best_pair(self):
-        pairs = get_spot_meta_and_prices()
-        logger.info(f"Paires spot trouvées: {[p['name'] for p in pairs]}")
-        # Critère simple : volume le plus élevé
-        best = None
-        best_vol = 0
-        for pair in pairs:
-            logger.info(f"{pair['name']} : volume 24h = {pair['volume']}, prix = {pair['price']}")
-            if pair["volume"] > best_vol:
-                best = pair
-                best_vol = pair["volume"]
-        if best:
-            logger.info(f"Meilleure paire spot sélectionnée: {best['name']}")
-        else:
-            logger.warning("Aucune paire spot trouvée avec volume et prix.")
-        return best
-
-    def setup_grid_orders(self, pair):
-        price = pair["price"]
-        grid = []
-        for i in range(1, GRID_LEVELS + 1):
-            buy_price = round(price * (1 - GRID_STEP_PCT * i), 6)
-            sell_price = round(price * (1 + GRID_STEP_PCT * i), 6)
-            grid.append(("buy", buy_price))
-            grid.append(("sell", sell_price))
-        logger.info(f"Grille générée pour {pair['name']} : {grid}")
-        return grid
-
-    def periodic_check(self):
-        if not self.running:
-            return
-        pair = self.select_best_pair()
-        if not pair:
-            logger.warning("Aucune paire spot sélectionnable à ce cycle.")
-            return
-        if not self.selected_pair or pair["name"] != self.selected_pair["name"]:
-            self.selected_pair = pair
-            self.send_alert(f"Nouvelle paire spot sélectionnée: {pair['name']} (prix {pair['price']})")
-        # Génère la grille
-        self.grid_orders = self.setup_grid_orders(pair)
-        self.send_alert(
-            f"Grille SPOT pour {pair['name']} (prix {pair['price']})\n" +
-            "\n".join([f"{side.upper()} {p}" for side, p in self.grid_orders])
+        # Placer un ordre limite d'achat
+        order_buy = dex.create_order(
+            symbol=symbol,
+            type="limit",
+            side="buy",
+            amount=amount,
+            price=buy_price
         )
-        # --- EXEMPLE (simulation) ---
-        # Pour chaque niveau, affiche le payload à signer pour un ordre
-        api_key = os.getenv("HYPERLIQUID_API_KEY")
-        # TODO: génère signature avec le SDK officiel
-        fake_signature = "signature_a_remplir"
-        nonce = int(time.time() * 1000)
-        asset_id = get_asset_id(pair["index"])
-        size = 1  # À adapter
-        for side, px in self.grid_orders:
-            payload = build_spot_order_payload(
-                asset_id, side == "buy", px, size, api_key, fake_signature, nonce
-            )
-            logger.info(f"Payload à signer pour {side} {px}: {payload}")
-            # Pour passer l'ordre : décommente la ligne suivante après avoir intégré la signature réelle
-            # resp = place_spot_order(payload)
-            # logger.info(f"Réponse Hyperliquid: {resp}")
+        print(f"Ordre BUY placé à {buy_price} : {order_buy['id']}")
 
-    def start_bot(self):
-        self.send_alert("✅ Bot SPOT démarré")
-        self.periodic_check()
-        self.scheduler.add_job(
-            self.periodic_check,
-            'interval',
-            seconds=CHECK_INTERVAL
+        # Placer un ordre limite de vente
+        order_sell = dex.create_order(
+            symbol=symbol,
+            type="limit",
+            side="sell",
+            amount=amount,
+            price=sell_price
         )
-        logger.info("Bot complètement initialisé")
-
-    def graceful_shutdown(self):
-        self.send_alert("⏹ Arrêt en cours...")
-        self.scheduler.shutdown()
-        time.sleep(2)
-        exit(0)
-
-# --- Commandes Telegram ---
-async def tg_command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 HyperGrid Spot Bot Actif\n"
-        "Commandes disponibles:\n"
-        "/status - État actuel\n"
-        "/stop - Arrêter le bot"
-    )
-
-async def tg_command_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Arrêt demandé...")
-    os._exit(0)
+        print(f"Ordre SELL placé à {sell_price} : {order_sell['id']}")
 
 if __name__ == "__main__":
-    bot = HyperliquidSpotGridBot()
-    application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
-    application.add_handler(CommandHandler('start', tg_command_start))
-    application.add_handler(CommandHandler('stop', tg_command_stop))
-    import threading
-    trading_thread = threading.Thread(target=bot.start_bot, daemon=True)
-    trading_thread.start()
-    try:
-        application.run_polling()
-    except KeyboardInterrupt:
-        bot.graceful_shutdown()
-    except Exception as e:
-        logger.critical(f"ERREUR FATALE: {str(e)}")
-        bot.graceful_shutdown()
+    # Vérification du solde
+    balance = dex.fetch_balance()
+    print("Solde USDC :", balance['USDC']['free'])
+
+    # Placement des ordres grid
+    place_grid_orders()
