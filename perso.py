@@ -25,44 +25,56 @@ ASK_TOKEN = 1
 # --- Initialisation CoinGecko ---
 cg = CoinGeckoAPI()
 
-# --- Fonction pour récupérer le prix du token via CoinGecko ---
-def get_token_price(token_address, platform="ethereum"):
-    try:
-        # Utilise l'endpoint /simple/token_price/{id}
-        result = cg.get_token_price(
-            id=platform,
-            contract_addresses=token_address,
-            vs_currencies='usd'
-        )
-        logger.info(f"Réponse CoinGecko pour {token_address}: {result}")
-        price = result.get(token_address.lower(), {}).get('usd')
-        return price
-    except Exception as e:
-        logger.error(f"Erreur CoinGecko API: {e}")
-        return None
+def get_price_or_token_price(user_input):
+    user_input = user_input.strip().lower()
+    # Si c'est une adresse de contrat ERC20 Ethereum
+    if user_input.startswith("0x") and len(user_input) == 42:
+        try:
+            result = cg.get_token_price(
+                id="ethereum",
+                contract_addresses=user_input,
+                vs_currencies='usd'
+            )
+            logger.info(f"Réponse CoinGecko pour contrat {user_input}: {result}")
+            price = result.get(user_input, {}).get('usd')
+            return price
+        except Exception as e:
+            logger.error(f"Erreur CoinGecko ERC20: {e}")
+            return None
+    else:
+        # Sinon, on suppose que c'est un id CoinGecko (crypto native)
+        try:
+            result = cg.get_price(ids=user_input, vs_currencies='usd')
+            logger.info(f"Réponse CoinGecko pour natif {user_input}: {result}")
+            price = result.get(user_input, {}).get('usd')
+            return price
+        except Exception as e:
+            logger.error(f"Erreur CoinGecko natif: {e}")
+            return None
 
 # --- Handlers Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {update.effective_user.id} started the bot.")
     await update.message.reply_text(
-        "Bienvenue ! Envoie-moi l'adresse du token (contract address ERC20 sur Ethereum) que tu veux analyser."
+        "Bienvenue ! Envoie-moi le nom d'une crypto (ex: bitcoin, ethereum) ou l'adresse du token ERC20 (ex: 0x...) que tu veux analyser."
     )
     return ASK_TOKEN
 
 async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    token_address = update.message.text.strip()
-    logger.info(f"User {update.effective_user.id} demande le token: {token_address}")
-    price = get_token_price(token_address)
+    user_input = update.message.text.strip()
+    logger.info(f"User {update.effective_user.id} demande le token: {user_input}")
+    price = get_price_or_token_price(user_input)
     if price:
         await update.message.reply_text(
-            f"Le prix actuel du token ({token_address}) est : {price:.4f} USD"
+            f"Le prix actuel de '{user_input}' est : {price:.4f} USD"
         )
-        logger.info(f"Réponse envoyée pour le token {token_address}")
+        logger.info(f"Réponse envoyée pour {user_input}")
     else:
         await update.message.reply_text(
-            "Impossible de récupérer le prix pour ce token. Vérifie l'adresse (ERC20 Ethereum) et réessaie."
+            "Impossible de récupérer le prix pour cette entrée. "
+            "Envoie un nom valide (ex: bitcoin, ethereum) ou une adresse de contrat ERC20 (ex: 0x...)."
         )
-        logger.warning(f"Echec récupération prix pour {token_address}")
+        logger.warning(f"Echec récupération prix pour {user_input}")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
