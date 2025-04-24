@@ -2,7 +2,7 @@ from hyperliquid.info import Info
 from hyperliquid.utils import constants
 
 # Remplace cette adresse par l'adresse Ethereum de l'utilisateur dont tu veux voir le solde
-user_address = "0x1AC2c9EcAC672Db143bCaa37B75aCe154256e372"
+user_address = "0x7A58F1dDb718D28e9ea62c2fe13bf881e50B3421"
 
 # Utilise l'URL de l'API principale (mainnet)
 info = Info(constants.MAINNET_API_URL, skip_ws=True)
