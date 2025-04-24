@@ -26,6 +26,19 @@ def get_mid_price(symbol):
     markets = dex.load_markets()
     return float(markets[symbol]["info"]["midPx"])
 
+def get_usdc_balance(balance):
+    """Détecte le solde USDC dans la structure retournée par ccxt"""
+    if 'free' in balance and 'USDC' in balance['free']:
+        return float(balance['free']['USDC'])
+    elif 'total' in balance and 'USDC' in balance['total']:
+        return float(balance['total']['USDC'])
+    elif 'USDC' in balance and isinstance(balance['USDC'], dict) and 'free' in balance['USDC']:
+        return float(balance['USDC']['free'])
+    else:
+        print("Impossible de trouver le solde USDC dans la réponse Hyperliquid :")
+        print(balance)
+        return 0.0
+
 def place_grid_orders():
     base_price = get_mid_price(symbol)
     print(f"\nPrix de référence : {base_price:.2f} USDC")
@@ -41,8 +54,7 @@ def place_grid_orders():
 
     # Vérifier le solde disponible
     balance = dex.fetch_balance()
-    print(balance)
-    usdc_dispo = float(balance['USDC']['free'])
+    usdc_dispo = get_usdc_balance(balance)
     nombre_ordres = grid_levels * 2
     capital_requis = usdc_par_ordre * nombre_ordres
 
