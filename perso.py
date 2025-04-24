@@ -132,14 +132,16 @@ async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 Analyse", callback_data="menu_analyse")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            "👋 Bienvenue ! Que souhaitez-vous faire ?", reply_markup=reply_markup
-        )
-    else:
-        await update.message.reply_text(
-            "👋 Bienvenue ! Que souhaitez-vous faire ?", reply_markup=reply_markup
-        )
+    chat_id = (
+        update.effective_chat.id
+        if update.effective_chat
+        else update.callback_query.message.chat_id
+    )
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="👋 Bienvenue ! Que souhaitez-vous faire ?",
+        reply_markup=reply_markup
+    )
 
 # --- Commande /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -158,7 +160,8 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Classement (callback) ---
 async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    message = await query.edit_message_text("🔎 Analyse des 20 tokens en cours...")
+    chat_id = query.message.chat_id
+    message = await context.bot.send_message(chat_id=chat_id, text="🔎 Analyse des 20 tokens en cours...")
     results = []
     progress_msg = ""
 
@@ -167,7 +170,7 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             df = get_binance_ohlc(symbol)
             if df is None or len(df) < 50:
                 progress_msg += f"❌ {name.title()} : Données insuffisantes.\n"
-                await message.edit_text(progress_msg)
+                await context.bot.edit_message_text(progress_msg, chat_id=chat_id, message_id=message.message_id)
                 continue
 
             df = compute_indicators(df)
@@ -187,15 +190,16 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 progress_msg += f"➖ {name.title()} : Aucun signal fort.\n"
 
-            await message.edit_text(progress_msg)
+            await context.bot.edit_message_text(progress_msg, chat_id=chat_id, message_id=message.message_id)
             await asyncio.sleep(0.3)
         except Exception as e:
             logger.error(f"Erreur analyse {name}: {e}")
             progress_msg += f"⚠️ {name.title()} : erreur pendant l'analyse.\n"
-            await message.edit_text(progress_msg)
+            await context.bot.edit_message_text(progress_msg, chat_id=chat_id, message_id=message.message_id)
 
     if not results:
-        await message.edit_text("Aucun signal fort détecté.")
+        await context.bot.edit_message_text("Aucun signal fort détecté.", chat_id=chat_id, message_id=message.message_id)
+        # Affiche l'écran d'accueil dans un NOUVEAU message
         await accueil(update, context)
         return
 
@@ -208,7 +212,8 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"   Signal : {res['signal']} | Score : {res['score']:.2f}\n"
             f"   Commentaire : {res['commentaire']}\n"
         )
-    await message.edit_text(final_msg)
+    await context.bot.edit_message_text(final_msg, chat_id=chat_id, message_id=message.message_id)
+    # Affiche l'écran d'accueil dans un NOUVEAU message
     await accueil(update, context)
 
 # --- Analyse (callback) ---
@@ -218,18 +223,20 @@ async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for name, symbol in TOP_TOKENS
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.callback_query.edit_message_text("📊 Sélectionnez une crypto :", reply_markup=reply_markup)
+    chat_id = update.callback_query.message.chat_id
+    await context.bot.send_message(chat_id=chat_id, text="📊 Sélectionnez une crypto :", reply_markup=reply_markup)
 
 # --- Analyse d'un token (callback) ---
 async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    chat_id = query.message.chat_id
     symbol = query.data.replace("analyse_", "")
     name = next((name.title() for name, sym in TOP_TOKENS if sym == symbol), symbol)
-    await query.edit_message_text(text=f"🔍 Analyse de {name} en cours...")
+    await context.bot.send_message(chat_id=chat_id, text=f"🔍 Analyse de {name} en cours...")
 
     df = get_binance_ohlc(symbol)
     if df is None or len(df) < 50:
-        await query.edit_message_text(f"❌ Pas assez de données pour {name}.")
+        await context.bot.send_message(chat_id=chat_id, text=f"❌ Pas assez de données pour {name}.")
         await accueil(update, context)
         return
 
@@ -247,7 +254,8 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         f"Signal : {signal} | Score : {score:.2f}\n"
         f"{commentaire}"
     )
-    await query.edit_message_text(result)
+    await context.bot.send_message(chat_id=chat_id, text=result)
+    # Affiche l'écran d'accueil dans un NOUVEAU message
     await accueil(update, context)
 
 # --- Main ---
