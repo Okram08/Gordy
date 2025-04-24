@@ -6,6 +6,23 @@ const readline = require('readline');
 const GRID_LEVELS = 3;
 const GRID_SPREAD = 0.01; // 1% au-dessus et en dessous du prix spot
 
+// Mapping pour les tokens connus
+const COIN_MAP = {
+    "BTC": "UBTC",
+    "BTC-USDC": "UBTC-USDC",
+    // Ajoute d'autres mappings si besoin
+};
+
+function getCoinFromSymbol(symbol) {
+    const base = symbol.split('-')[0].toUpperCase();
+    return COIN_MAP[base] || base;
+}
+
+function roundTo8(x) {
+    // Arrondit à 8 décimales, supprime les zéros inutiles
+    return Number.parseFloat(x).toFixed(8).replace(/\.?0+$/, '');
+}
+
 const sdk = new Hyperliquid({
     privateKey: process.env.HL_PRIVATE_KEY,
     walletAddress: process.env.HL_WALLET_ADDRESS
@@ -23,19 +40,17 @@ function ask(question) {
 }
 
 async function getSpotPrice(symbol) {
-    // symbol: "BTC-USDC"
-    const coin = symbol.split('-')[0].toUpperCase();
+    const coin = getCoinFromSymbol(symbol);
     const allMids = await sdk.info.getAllMids();
     const keys = Object.keys(allMids);
 
     // Affiche tous les marchés disponibles pour debug
     console.log("Marchés disponibles :", keys.join(', '));
 
-    // Recherche d'une clé qui contient le coin et 'SPOT'
+    // Recherche d'une clé qui commence par le coin et contient 'SPOT'
     const spotKey = keys.find(
-        k => k.toUpperCase().includes(coin) && k.toUpperCase().includes('SPOT')
+        k => k.toUpperCase().startsWith(coin) && k.toUpperCase().includes('SPOT')
     );
-
     if (!spotKey) {
         throw new Error("Marché spot non trouvé pour " + coin + ". Clés disponibles : " + keys.join(', '));
     }
@@ -58,17 +73,15 @@ function distributeCapital(capital, levels) {
 }
 
 async function placeOrder(symbol, side, price, quantity) {
-    // Recherche de la clé spot exacte
+    const coin = getCoinFromSymbol(symbol);
     const allMids = await sdk.info.getAllMids();
     const keys = Object.keys(allMids);
-    const coin = symbol.split('-')[0].toUpperCase();
     const spotKey = keys.find(
-        k => k.toUpperCase().includes(coin) && k.toUpperCase().includes('SPOT')
+        k => k.toUpperCase().startsWith(coin) && k.toUpperCase().includes('SPOT')
     );
     if (!spotKey) {
         throw new Error("Impossible de trouver la clé spot pour la paire " + symbol);
     }
-
     const order = {
         coin: spotKey,
         is_buy: side === "buy",
@@ -118,7 +131,8 @@ async function main() {
 
     for (let i = 0; i < GRID_LEVELS; i++) {
         const price = grid[i];
-        const quantity = allocations[i] / price;
+        let quantity = allocations[i] / price;
+        quantity = roundTo8(quantity);
         await placeOrder(symbol, "buy", price, quantity);
         await new Promise(r => setTimeout(r, 1000));
     }
