@@ -25,7 +25,7 @@ const signMessage = async () => {
     };
 
     console.log(`📦 Enregistrement de : ${walletAddress}`);
-    const response = await axios.post("https://api.hyperliquid.xyz/register", payload);
+    const response = await axios.post("https://api.hyperliquid.xyz/api/register", payload);
 
     if (response.data) {
       console.log("✅ Vault enregistré avec succès !");
