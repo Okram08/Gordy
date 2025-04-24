@@ -28,15 +28,19 @@ def get_mid_price(symbol):
 
 def get_usdc_balance(balance):
     """Détecte le solde USDC dans la structure retournée par ccxt"""
+    # Essaie les structures classiques
     if 'free' in balance and 'USDC' in balance['free']:
         return float(balance['free']['USDC'])
     elif 'total' in balance and 'USDC' in balance['total']:
         return float(balance['total']['USDC'])
     elif 'USDC' in balance and isinstance(balance['USDC'], dict) and 'free' in balance['USDC']:
         return float(balance['USDC']['free'])
+    elif 'USDC' in balance and isinstance(balance['USDC'], (int, float)):
+        return float(balance['USDC'])
     else:
-        print("Impossible de trouver le solde USDC dans la réponse Hyperliquid :")
+        print("\n[DEBUG] Impossible de trouver le solde USDC dans la réponse Hyperliquid :")
         print(balance)
+        print("[/DEBUG]\n")
         return 0.0
 
 def place_grid_orders():
@@ -54,6 +58,9 @@ def place_grid_orders():
 
     # Vérifier le solde disponible
     balance = dex.fetch_balance()
+    print("\n[DEBUG] Structure complète du solde retourné par fetch_balance() :")
+    print(balance)
+    print("[/DEBUG]\n")
     usdc_dispo = get_usdc_balance(balance)
     nombre_ordres = grid_levels * 2
     capital_requis = usdc_par_ordre * nombre_ordres
