@@ -8,6 +8,7 @@ from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
 )
+import asyncio
 
 # --- Logging configuration ---
 logging.basicConfig(
@@ -103,32 +104,32 @@ def generate_signal_and_score(df):
     return signal, score, commentaire
 
 async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Analyse des 20 premiers tokens (hors stablecoins)...\n")
+    message = await update.message.reply_text("Analyse des 20 premiers tokens (hors stablecoins)...\n")
     results = []
-    for name, symbol in TOP_TOKENS:
+    progress_msg = ""
+    for idx, (name, symbol) in enumerate(TOP_TOKENS, 1):
         try:
-            await update.message.reply_text(f"Analyse de {name.title()} ({symbol}) en cours...")
+            progress_msg += f"🔎 Analyse de {name.title()} ({symbol}) en cours...\n"
+            await message.edit_text(progress_msg)
             df = get_binance_ohlc(symbol)
             if df is None or len(df) < 21:
-                await update.message.reply_text(f"Pas assez de données pour {name.title()} ({symbol}).")
+                progress_msg += f"❌ Pas assez de données pour {name.title()} ({symbol}).\n"
+                await message.edit_text(progress_msg)
                 continue
             df = compute_indicators(df)
             signal, score, commentaire = generate_signal_and_score(df)
             latest = df.iloc[-1]
             if signal != "HOLD":
-                msg = (
-                    f"Résultat pour {name.title()} ({symbol}):\n"
-                    f"Prix actuel : {latest['close']:.4f} USDT\n"
-                    f"EMA10 : {latest['EMA10']:.4f}\n"
-                    f"SMA20 : {latest['SMA20']:.4f}\n"
+                res_msg = (
+                    f"\n✅ {name.title()} ({symbol}):\n"
+                    f"Prix : {latest['close']:.4f} USDT\n"
+                    f"EMA10 : {latest['EMA10']:.4f} | SMA20 : {latest['SMA20']:.4f}\n"
                     f"RSI : {latest['RSI']:.2f}\n"
-                    f"Bollinger Lower : {latest['BB_lower']:.4f}\n"
-                    f"Bollinger Upper : {latest['BB_upper']:.4f}\n"
-                    f"Signal : {signal}\n"
-                    f"Score de confiance : {score:.2f}\n"
-                    f"Commentaire : {commentaire}\n"
+                    f"Bollinger : [{latest['BB_lower']:.4f} ; {latest['BB_upper']:.4f}]\n"
+                    f"Signal : {signal} | Score : {score:.2f}\n"
+                    f"{commentaire}\n"
                 )
-                await update.message.reply_text(msg)
+                progress_msg += res_msg
                 results.append({
                     "name": name.title(),
                     "symbol": symbol,
@@ -138,19 +139,23 @@ async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "commentaire": commentaire
                 })
             else:
-                await update.message.reply_text(f"Aucun signal fort détecté pour {name.title()} ({symbol}).")
+                progress_msg += f"➖ Aucun signal fort pour {name.title()} ({symbol}).\n"
+            await message.edit_text(progress_msg)
+            await asyncio.sleep(0.5)  # Pour éviter les rate limits de Telegram
         except Exception as e:
-            await update.message.reply_text(f"Erreur lors de l'analyse de {name.title()} ({symbol}) : {e}")
+            progress_msg += f"⚠️ Erreur analyse {name.title()} ({symbol}) : {e}\n"
+            await message.edit_text(progress_msg)
             logger.error(f"Erreur analyse {name} : {e}")
 
     if not results:
-        await update.message.reply_text("Aucun signal fort détecté sur les 20 premiers tokens.")
+        progress_msg += "\nAucun signal fort détecté sur les 20 premiers tokens."
+        await message.edit_text(progress_msg)
         return
 
     # Classement par score décroissant
     results = sorted(results, key=lambda x: x["score"], reverse=True)
     top3 = results[:3]
-    msg = "🏆 Classement final : Top 3 tokens avec les signaux les plus forts :\n"
+    msg = progress_msg + "\n🏆 Classement final : Top 3 tokens avec les signaux les plus forts :\n"
     for i, res in enumerate(top3, 1):
         msg += (
             f"\n{i}. {res['name']} ({res['symbol']})\n"
@@ -159,7 +164,7 @@ async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"   Score : {res['score']:.2f}\n"
             f"   Commentaire : {res['commentaire']}\n"
         )
-    await update.message.reply_text(msg)
+    await message.edit_text(msg)
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
