@@ -1,12 +1,12 @@
 require("dotenv").config();
-const { default: Hyperliquid } = require("hyperliquid");
+const { Hyperliquid } = require("hyperliquid");
 
 const HL_WALLET_ADDRESS = process.env.HL_WALLET_ADDRESS;
 const HL_PRIVATE_KEY = process.env.HL_PRIVATE_KEY;
 
 async function registerVault() {
   try {
-    const exchange = Hyperliquid({
+    const exchange = new Hyperliquid({
       wallet: {
         address: HL_WALLET_ADDRESS,
         privateKey: HL_PRIVATE_KEY,
