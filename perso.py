@@ -53,7 +53,7 @@ def get_binance_ohlc(symbol, interval="1h", limit=100):
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
-        df = pd.DataFrame(data, columns=[ 
+        df = pd.DataFrame(data, columns=[
             "open_time", "open", "high", "low", "close", "volume",
             "close_time", "quote_asset_volume", "number_of_trades",
             "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
@@ -127,8 +127,16 @@ def generate_signal_and_score(df):
 
 # --- Commandes Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [
+            InlineKeyboardButton("Classement", callback_data="classement"),
+            InlineKeyboardButton("Analyse", callback_data="analyse")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "👋 Bienvenue ! Utilisez /analyse pour analyser un token ou /classement pour voir le top des signaux."
+        "👋 Bienvenue ! Sélectionnez une option ci-dessous pour commencer :",
+        reply_markup=reply_markup
     )
 
 async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -137,43 +145,7 @@ async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for name, symbol in TOP_TOKENS
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("📊 Sélectionnez une crypto :", reply_markup=reply_markup)
-
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    symbol = query.data  # Le symbole correct, ex: 'BTCUSDT' ou 'ETHUSDT'
-    name = next((name.title() for name, sym in TOP_TOKENS if sym == symbol), symbol)
-    await query.edit_message_text(text=f"🔍 Analyse de {name} en cours...")
-
-    df = get_binance_ohlc(symbol)  # Utiliser directement le symbole ici
-    if df is None or len(df) < 50:
-        await query.edit_message_text(f"❌ Pas assez de données pour {name}.")
-        return
-
-    df = compute_indicators(df)
-    signal, score, commentaire = generate_signal_and_score(df)
-    latest = df.iloc[-1]
-
-    result = (
-        f"📊 Résultat pour {name} ({symbol}):\n"
-        f"Prix : {latest['close']:.4f} USDT\n"
-        f"EMA10 : {latest['EMA10']:.4f} | SMA20 : {latest['SMA20']:.4f} | SMA200 : {latest['SMA200']:.4f}\n"
-        f"RSI : {latest['RSI']:.2f} | MACD : {latest['MACD']:.4f} | ADX : {latest['ADX']:.2f}\n"
-        f"Bollinger : [{latest['BB_lower']:.4f} ; {latest['BB_upper']:.4f}]\n"
-        f"Volume actuel : {latest['volume']:.2f} | Moyenne : {latest['volume_mean']:.2f}\n"
-        f"Signal : {signal} | Score : {score:.2f}\n"
-        f"{commentaire}"
-    )
-    await query.edit_message_text(result)
-
-    # Ajout des boutons pour relancer une analyse ou revenir à l'accueil
-    keyboard = [
-        [InlineKeyboardButton("Faire une nouvelle analyse", callback_data="analyse")],
-        [InlineKeyboardButton("Retour à l'accueil", callback_data="start")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.message.reply_text("🔄 Que souhaitez-vous faire maintenant ?", reply_markup=reply_markup)
+    await update.message.reply_text("📊 Sélectionnez une crypto pour analyser :", reply_markup=reply_markup)
 
 async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = await update.message.reply_text("🔎 Analyse des 20 tokens en cours...")
@@ -227,12 +199,20 @@ async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     await message.edit_text(final_msg)
 
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    action = query.data
+
+    if action == "analyse":
+        await analyse(update, context)
+    elif action == "classement":
+        await classement(update, context)
+
 # --- Main ---
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("analyse", analyse))
     app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(CommandHandler("classement", classement))
     logger.info("Bot lancé et en attente de commandes.")
     app.run_polling()
