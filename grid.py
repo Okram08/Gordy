@@ -40,6 +40,6 @@ def get_spot_balance(address):
         print(f"Erreur lors de la requête : {e}")
 
 # Remplace cette adresse par celle dont tu veux voir le solde
-user_address = "0xb289ee20cd31C74cC73759f215336A2454488d8f"
+user_address = "0x7A58F1dDb718D28e9ea62c2fe13bf881e50B3421"
 
 get_spot_balance(user_address)
