@@ -1,6 +1,5 @@
 require('dotenv').config();
 const { Hyperliquid } = require('hyperliquid');
-const fetch = require('node-fetch');
 const prompt = require('prompt-sync')({ sigint: true });
 
 const privateKey = process.env.HL_PRIVATE_KEY;
@@ -16,12 +15,11 @@ const sdk = new Hyperliquid({
 });
 
 async function getCurrentPrice(symbol) {
+  const allMids = await sdk.info.getAllMids();
+  const mids = allMids.spotMids;
   const spotSymbol = symbol.replace('-SPOT', '/USDC');
-  const response = await fetch('https://api.hyperliquid.xyz/info');
-  const data = await response.json();
-  const mids = data['spotMids'];
-  if (!mids || !mids[spotSymbol]) {
-    throw new Error('Symbole spot non trouvé dans la réponse API');
+  if (!mids[spotSymbol]) {
+    throw new Error(`Prix spot non trouvé pour le symbole ${spotSymbol}`);
   }
   return parseFloat(mids[spotSymbol]);
 }
@@ -60,6 +58,7 @@ async function main() {
 
   const currentPrice = await getCurrentPrice(symbol);
 
+  // Fourchette automatique : ±3% autour du prix actuel
   const rangePct = 0.03;
   const lower = currentPrice * (1 - rangePct);
   const upper = currentPrice * (1 + rangePct);
