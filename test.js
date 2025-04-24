@@ -1,23 +1,26 @@
-require('dotenv').config();
-const { Hyperliquid } = require('hyperliquid');
+require("dotenv").config();
+const { default: Hyperliquid } = require("hyperliquid");
 
-const sdk = new Hyperliquid({
-    privateKey: process.env.HL_PRIVATE_KEY,
-    walletAddress: process.env.HL_WALLET_ADDRESS
-});
+const HL_WALLET_ADDRESS = process.env.HL_WALLET_ADDRESS;
+const HL_PRIVATE_KEY = process.env.HL_PRIVATE_KEY;
 
-(async () => {
-    try {
-        const res = await sdk.exchange.placeOrder({
-            coin: 'UBTC-SPOT',
-            is_buy: true,
-            sz: '0.0001',
-            limit_px: 10000,
-            reduce_only: false,
-            order_type: { limit: { tif: 'Gtc' } }
-        });
-        console.log(res);
-    } catch (e) {
-        console.error(e);
-    }
-})();
+async function registerVault() {
+  try {
+    const exchange = Hyperliquid({
+      wallet: {
+        address: HL_WALLET_ADDRESS,
+        privateKey: HL_PRIVATE_KEY,
+      },
+      baseUrl: "https://api.hyperliquid.xyz",
+    });
+
+    console.log("📦 Enregistrement du vault pour :", HL_WALLET_ADDRESS);
+
+    const result = await exchange.register();
+    console.log("✅ Résultat :", result);
+  } catch (err) {
+    console.error("❌ Erreur lors de l'enregistrement :", err.message || err);
+  }
+}
+
+registerVault();
