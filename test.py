@@ -130,10 +130,6 @@ def prepare_data(df, features):
 def evaluate_trade_performance(entry, current_price):
     """
     Évalue la performance d'un trade en fonction du prix actuel, TP et SL.
-
-    :param entry: Dictionnaire contenant les informations du trade (direction, TP, SL, etc.)
-    :param current_price: Le prix actuel du token
-    :return: Une évaluation de la performance du trade ("Bon", "Moyenne", "Mauvais")
     """
     direction = entry['direction']  # ⬆️ LONG, ⬇️ SHORT, 🔁 NEUTRE
     tp = entry['tp']
@@ -264,4 +260,33 @@ async def analyze_and_reply(update: Update, token: str):
 
     except Exception as e:
         logging.error(f"Erreur: {str(e)}")
-        await update.message.reply_text(f"❌ Une
+        await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
+
+async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    history = load_history()
+    if history:
+        messages = [
+            f"🕒 {entry['timestamp']}\n📉 {entry['token'].upper()} | {entry['direction']} | Confiance: {entry['confidence']*100:.2f}%\n"
+            f"💰 Prix: {entry['current_price']:.2f}$ | TP: {entry['tp']:.2f}$ | SL: {entry['sl']:.2f}$\n"
+            f"📊 Performance: {entry['performance']}\n"
+            for entry in history[-5:]
+        ]
+        await update.message.reply_text("\n\n".join(messages))
+    else:
+        await update.message.reply_text("Aucune analyse historique disponible.")
+
+def main() -> None:
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("history", show_history))
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
+        },
+        fallbacks=[]
+    )
+    application.add_handler(conv_handler)
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
