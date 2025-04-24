@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Liste des 20 premiers tokens hors stablecoins (2025)
 TOP_TOKENS = [
     ("bitcoin", "BTCUSDT"),
     ("ethereum", "ETHUSDT"),
@@ -46,8 +45,7 @@ TOP_TOKENS = [
     ("polygon", "MATICUSDT"),
 ]
 
-# --- Analyse ---
-def get_binance_ohlc(symbol, interval="1h", limit=100):
+def get_binance_ohlc(symbol, interval="1h", limit=250):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     try:
@@ -69,20 +67,30 @@ def get_binance_ohlc(symbol, interval="1h", limit=100):
         return None
 
 def compute_indicators(df):
-    df["SMA20"] = ta.trend.sma_indicator(df["close"], window=20)
+    df = df.copy()
+    for col in ["close", "high", "low", "volume"]:
+        df[col] = df[col].ffill().bfill()
+    # Calcul des indicateurs avec Pandas et ta, sans min_periods pour ta
+    df["SMA20"] = df["close"].rolling(window=20, min_periods=1).mean()
     df["EMA10"] = ta.trend.ema_indicator(df["close"], window=10)
     df["RSI"] = ta.momentum.rsi(df["close"], window=14)
-    df["SMA200"] = ta.trend.sma_indicator(df["close"], window=200)
+    df["SMA200"] = df["close"].rolling(window=200, min_periods=1).mean()
     df["MACD"] = ta.trend.macd_diff(df["close"])
     df["ADX"] = ta.trend.adx(df["high"], df["low"], df["close"], window=14)
-    df["volume_mean"] = df["volume"].rolling(window=20).mean()
+    df["volume_mean"] = df["volume"].rolling(window=20, min_periods=1).mean()
     bb = ta.volatility.BollingerBands(df["close"], window=20, window_dev=2)
     df["BB_upper"] = bb.bollinger_hband()
     df["BB_lower"] = bb.bollinger_lband()
+    for col in ["SMA20", "EMA10", "RSI", "SMA200", "MACD", "ADX", "volume_mean", "BB_upper", "BB_lower"]:
+        df[col] = df[col].ffill().bfill().fillna(df["close"])
     return df
 
 def generate_signal_and_score(df):
     latest = df.iloc[-1]
+    # Sécurité pour éviter les NaN dans les calculs
+    for key in ["SMA200", "BB_upper", "BB_lower"]:
+        if pd.isna(latest[key]):
+            latest[key] = latest["close"]
     score_buy = 0
     score_sell = 0
 
@@ -124,22 +132,26 @@ def generate_signal_and_score(df):
         score = score_buy
         commentaire = f"Signal d'achat ({score_buy}/7 critères validés)."
         entry = latest["close"]
-        sl1 = latest["SMA200"] * 0.997  # un peu sous la SMA200
-        sl2 = entry * 0.97              # -3%
+        sma200 = latest["SMA200"] if not pd.isna(latest["SMA200"]) else entry
+        bb_upper = latest["BB_upper"] if not pd.isna(latest["BB_upper"]) else entry
+        sl1 = sma200 * 0.997
+        sl2 = entry * 0.97
         stop_loss = min(sl1, sl2)
-        tp1 = latest["BB_upper"] * 0.995  # un peu sous la résistance
-        tp2 = entry * 1.06                # +6%
+        tp1 = bb_upper * 0.995
+        tp2 = entry * 1.06
         take_profit = max(tp1, tp2)
     elif score_sell >= 4 and score_sell > score_buy:
         signal = "📉 SELL"
         score = score_sell
         commentaire = f"Signal de vente ({score_sell}/7 critères validés)."
         entry = latest["close"]
-        sl1 = latest["SMA200"] * 1.003  # un peu au-dessus de la SMA200
-        sl2 = entry * 1.03              # +3%
+        sma200 = latest["SMA200"] if not pd.isna(latest["SMA200"]) else entry
+        bb_lower = latest["BB_lower"] if not pd.isna(latest["BB_lower"]) else entry
+        sl1 = sma200 * 1.003
+        sl2 = entry * 1.03
         stop_loss = max(sl1, sl2)
-        tp1 = latest["BB_lower"] * 1.005  # un peu au-dessus du support
-        tp2 = entry * 0.94                # -6%
+        tp1 = bb_lower * 1.005
+        tp2 = entry * 0.94
         take_profit = min(tp1, tp2)
     else:
         signal = "🤝 HOLD"
@@ -150,7 +162,6 @@ def generate_signal_and_score(df):
 
     return signal, score, commentaire, stop_loss, take_profit
 
-# --- Ecran d'accueil ---
 async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🏆 Classement", callback_data="menu_classement")],
@@ -170,11 +181,9 @@ async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
-# --- Commande /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await accueil(update, context)
 
-# --- Commande /help ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     aide = (
         "*Aide du bot d'analyse crypto*\n\n"
@@ -185,7 +194,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(aide, parse_mode=ParseMode.MARKDOWN)
 
-# --- Handler du menu principal et navigation ---
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -199,7 +207,6 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "retour_accueil":
         await accueil(update, context)
 
-# --- Classement (callback) ---
 async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = query.message.chat_id
@@ -263,7 +270,6 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode=ParseMode.MARKDOWN
     )
 
-# --- Analyse (callback) ---
 async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
@@ -274,7 +280,6 @@ async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.callback_query.message.chat_id
     await context.bot.send_message(chat_id=chat_id, text="📊 *Sélectionnez une crypto :*", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
-# --- Analyse d'un token (callback) ---
 async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = query.message.chat_id
@@ -311,7 +316,6 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
     await context.bot.send_message(chat_id=chat_id, text=result, parse_mode=ParseMode.MARKDOWN)
     await accueil(update, context)
 
-# --- Aide (callback) ---
 async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = query.message.chat_id
@@ -325,7 +329,6 @@ async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]]
     await context.bot.send_message(chat_id=chat_id, text=aide, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
-# --- Gestion des erreurs ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Exception while handling an update:", exc_info=context.error)
     try:
@@ -337,7 +340,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error(f"Erreur lors de l'envoi du message d'erreur : {e}")
 
-# --- Main ---
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
