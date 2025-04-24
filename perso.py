@@ -22,9 +22,24 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # --- Conversation state ---
-ASK_SYMBOL = 1
+ASK_TOKEN = 1
 
-# --- Binance Public API ---
+# --- Utilitaires Binance ---
+def get_binance_symbols():
+    """Récupère tous les symboles de trading disponibles sur Binance."""
+    url = "https://api.binance.com/api/v3/exchangeInfo"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        symbols = data["symbols"]
+        # Crée un mapping {baseAsset.lower(): symbol} pour les paires contre USDT
+        mapping = {s["baseAsset"].lower(): s["symbol"] for s in symbols if s["quoteAsset"] == "USDT" and s["status"] == "TRADING"}
+        return mapping
+    except Exception as e:
+        logger.error(f"Erreur récupération des symboles Binance : {e}")
+        return {}
+
 def get_binance_ohlc(symbol, interval="1h", limit=48):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
@@ -76,17 +91,33 @@ def generate_signal(df):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {update.effective_user.id} started the bot.")
     await update.message.reply_text(
-        "Bienvenue ! Envoie-moi le symbole de la paire Binance (ex: BTCUSDT, ETHUSDT) que tu veux analyser."
+        "Bienvenue ! Envoie-moi le nom du token (ex: bitcoin, ethereum, solana, pepe...) que tu veux analyser."
     )
-    return ASK_SYMBOL
+    return ASK_TOKEN
 
-async def ask_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    symbol = update.message.text.strip().upper()
-    logger.info(f"User {update.effective_user.id} demande analyse pour: {symbol}")
+async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    token_name = update.message.text.strip().lower()
+    logger.info(f"User {update.effective_user.id} demande analyse pour: {token_name}")
+
+    # Récupère la liste des symboles Binance (cache en mémoire pour éviter trop de requêtes)
+    if not hasattr(ask_token, "symbol_mapping"):
+        ask_token.symbol_mapping = get_binance_symbols()
+
+    symbol_mapping = ask_token.symbol_mapping
+
+    if token_name not in symbol_mapping:
+        await update.message.reply_text(
+            f"Token '{token_name}' non trouvé ou non disponible contre USDT sur Binance.\n"
+            "Essaie par exemple : bitcoin, ethereum, solana, pepe, dogecoin, etc."
+        )
+        logger.warning(f"Token non trouvé : {token_name}")
+        return ConversationHandler.END
+
+    symbol = symbol_mapping[token_name]
     df = get_binance_ohlc(symbol)
     if df is None or len(df) < 21:
         await update.message.reply_text(
-            "Impossible de récupérer suffisamment de données pour ce symbole. Vérifie le symbole et réessaie (ex: BTCUSDT)."
+            f"Impossible de récupérer suffisamment de données pour {token_name.upper()} ({symbol})."
         )
         logger.warning(f"Echec récupération données pour {symbol}")
         return ConversationHandler.END
@@ -95,8 +126,8 @@ async def ask_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     signal = generate_signal(df)
     latest = df.iloc[-1]
     await update.message.reply_text(
-        f"Analyse pour '{symbol}':\n"
-        f"Prix actuel : {latest['close']:.4f}\n"
+        f"Analyse pour '{token_name.upper()}' ({symbol}):\n"
+        f"Prix actuel : {latest['close']:.4f} USDT\n"
         f"EMA10 : {latest['EMA10']:.4f}\n"
         f"SMA20 : {latest['SMA20']:.4f}\n"
         f"RSI : {latest['RSI']:.2f}\n"
@@ -104,7 +135,7 @@ async def ask_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Bollinger Upper : {latest['BB_upper']:.4f}\n"
         f"Signal sur 24h : {signal}"
     )
-    logger.info(f"Analyse envoyée pour {symbol} - Signal: {signal}")
+    logger.info(f"Analyse envoyée pour {token_name.upper()} - Signal: {signal}")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -118,7 +149,7 @@ if __name__ == "__main__":
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            ASK_SYMBOL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_symbol)],
+            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
