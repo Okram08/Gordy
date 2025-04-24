@@ -23,12 +23,23 @@ function ask(question) {
 }
 
 async function getSpotPrice(symbol) {
-    // symbol: "BTC-USDC" => key: "BTC-SPOT"
-    const coin = symbol.split('-')[0];
+    // symbol: "BTC-USDC"
+    const coin = symbol.split('-')[0].toUpperCase();
     const allMids = await sdk.info.getAllMids();
-    const key = `${coin}-SPOT`;
-    if (!(key in allMids)) throw new Error("Marché spot non trouvé");
-    return parseFloat(allMids[key]);
+    const keys = Object.keys(allMids);
+
+    // Affiche tous les marchés disponibles pour debug
+    console.log("Marchés disponibles :", keys.join(', '));
+
+    // Recherche d'une clé qui contient le coin et 'SPOT'
+    const spotKey = keys.find(
+        k => k.toUpperCase().includes(coin) && k.toUpperCase().includes('SPOT')
+    );
+
+    if (!spotKey) {
+        throw new Error("Marché spot non trouvé pour " + coin + ". Clés disponibles : " + keys.join(', '));
+    }
+    return parseFloat(allMids[spotKey]);
 }
 
 function buildGrid(centerPrice, levels, spread) {
@@ -47,9 +58,19 @@ function distributeCapital(capital, levels) {
 }
 
 async function placeOrder(symbol, side, price, quantity) {
-    const coin = symbol.split('-')[0] + "-SPOT";
+    // Recherche de la clé spot exacte
+    const allMids = await sdk.info.getAllMids();
+    const keys = Object.keys(allMids);
+    const coin = symbol.split('-')[0].toUpperCase();
+    const spotKey = keys.find(
+        k => k.toUpperCase().includes(coin) && k.toUpperCase().includes('SPOT')
+    );
+    if (!spotKey) {
+        throw new Error("Impossible de trouver la clé spot pour la paire " + symbol);
+    }
+
     const order = {
-        coin,
+        coin: spotKey,
         is_buy: side === "buy",
         sz: quantity,
         limit_px: price,
