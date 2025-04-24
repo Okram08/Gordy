@@ -1,41 +1,46 @@
-require("dotenv").config();
-const { ethers } = require("ethers");
-const axios = require("axios");
+require('dotenv').config();
 
-// 🔐 Clés privées
+const { Hyperliquid } = require('hyperliquid');
+const prompt = require('prompt-sync')({ sigint: true });
+
+// Récupération de la clé privée depuis .env
 const privateKey = process.env.HL_PRIVATE_KEY;
-const walletAddress = process.env.HL_WALLET_ADDRESS;
-
-if (!privateKey || !walletAddress) {
-  console.error("❌ HL_PRIVATE_KEY ou HL_WALLET_ADDRESS manquant dans .env");
+if (!privateKey) {
+  console.error('Erreur : La clé privée Hyperliquid n\'est pas définie dans .env (HL_PRIVATE_KEY)');
   process.exit(1);
 }
 
-// 🧠 Préparation du message à signer
-const message = `Register vault address ${walletAddress}`;
-const signMessage = async () => {
+// Demande des paramètres à l'utilisateur
+const symbol = prompt('Entrez le symbole spot (ex: BTC-SPOT) : ').trim();
+const montant = prompt('Montant à allouer (en USDC) : ').trim();
+const price = prompt('Prix limite souhaité : ').trim();
+
+// Initialisation du SDK Hyperliquid
+const sdk = new Hyperliquid({
+  privateKey: privateKey,
+  enableWs: false,
+  testnet: false, // Passe à true si tu veux utiliser le testnet
+});
+
+async function main() {
   try {
-    const wallet = new ethers.Wallet(privateKey);
-    const signature = await wallet.signMessage(message);
+    // Affichage des soldes (optionnel)
+    const balances = await sdk.info.userState();
+    console.log('Vos soldes :', balances);
 
-    const payload = {
-      address: walletAddress,
-      msg: message,
-      sig: signature,
-    };
+    // Passage de l'ordre spot
+    const order = await sdk.order.placeOrder({
+      symbol: symbol,  // ex: 'BTC-SPOT'
+      price: price,    // prix limite
+      size: montant,   // montant en USDC
+      side: 'buy',     // 'buy' ou 'sell'
+      type: 'limit',   // 'limit' ou 'market'
+    });
 
-    console.log(`📦 Enregistrement de : ${walletAddress}`);
-    const response = await axios.post("https://api.hyperliquid.xyz/api/register", payload);
-
-    if (response.data) {
-      console.log("✅ Vault enregistré avec succès !");
-      console.log(response.data);
-    } else {
-      console.error("❌ Erreur : Réponse vide ou invalide");
-    }
-  } catch (error) {
-    console.error("❌ Erreur lors de l'enregistrement :", error.message);
+    console.log('Ordre envoyé :', order);
+  } catch (err) {
+    console.error('Erreur lors de la passation de l\'ordre :', err);
   }
-};
+}
 
-signMessage();
+main();
