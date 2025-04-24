@@ -358,7 +358,7 @@ async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Utilisez le menu pour accéder au classement ou analyser une crypto.\n"
         "• Les signaux sont calculés à partir d'indicateurs techniques sur 1h.\n"
         "• Cliquez sur « Retour » à tout moment pour revenir au menu principal.\n"
-        "• Pour toute question, contactez le développeur."
+        "• Pour toute question, une Gordon et contactez Tom."
     )
     keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]]
     await context.bot.send_message(chat_id=chat_id, text=aide, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
