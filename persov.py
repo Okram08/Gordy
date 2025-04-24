@@ -67,88 +67,6 @@ def get_binance_ohlc(symbol, interval="1h", limit=100):
         logger.error(f"Erreur récupération données Binance : {e}")
         return None
 
-def compute_indicators(df):
-    df["SMA20"] = ta.trend.sma_indicator(df["close"], window=20)
-    df["EMA10"] = ta.trend.ema_indicator(df["close"], window=10)
-    df["RSI"] = ta.momentum.rsi(df["close"], window=14)
-    df["SMA200"] = ta.trend.sma_indicator(df["close"], window=200)
-    df["MACD"] = ta.trend.macd_diff(df["close"])
-    df["ADX"] = ta.trend.adx(df["high"], df["low"], df["close"], window=14)
-    df["volume_mean"] = df["volume"].rolling(window=20).mean()
-    bb = ta.volatility.BollingerBands(df["close"], window=20, window_dev=2)
-    df["BB_upper"] = bb.bollinger_hband()
-    df["BB_lower"] = bb.bollinger_lband()
-    return df
-
-def generate_signal_and_score(df):
-    latest = df.iloc[-1]
-    score = 0
-    commentaire = ""
-
-    # Calcul du score ajusté
-    if latest["close"] > latest["SMA200"]:
-        if (
-            latest["EMA10"] > latest["SMA20"] and
-            latest["RSI"] < 35 and
-            latest["close"] < latest["BB_lower"] and
-            latest["MACD"] > 0 and
-            latest["ADX"] > 20 and
-            latest["volume"] > 1.5 * latest["volume_mean"]
-        ):
-            signal = "📈 BUY"
-            score += abs(latest["EMA10"] - latest["SMA20"]) * 2  # Poids accru pour la tendance
-            score += max(0, 35 - latest["RSI"]) * 2  # Poids accru pour RSI
-            score += latest["MACD"] * 1.5  # Poids pour MACD
-            score += latest["ADX"] / 2
-            commentaire = "Signal d'achat confirmé (survente, volume élevé, MACD haussier, tendance forte)."
-        else:
-            signal = "🤝 HOLD"
-            commentaire = "Aucun signal d'achat fort malgré la tendance haussière."
-    elif latest["close"] < latest["SMA200"]:
-        if (
-            latest["EMA10"] < latest["SMA20"] and
-            latest["RSI"] > 65 and
-            latest["close"] > latest["BB_upper"] and
-            latest["MACD"] < 0 and
-            latest["ADX"] > 20 and
-            latest["volume"] > 1.5 * latest["volume_mean"]
-        ):
-            signal = "📉 SELL"
-            score += abs(latest["EMA10"] - latest["SMA20"]) * 2
-            score += max(0, latest["RSI"] - 65) * 2
-            score += abs(latest["MACD"]) * 1.5
-            score += latest["ADX"] / 2
-            commentaire = "Signal de vente confirmé (surachat, volume élevé, MACD baissier, tendance forte)."
-        else:
-            signal = "🤝 HOLD"
-            commentaire = "Aucun signal de vente fort malgré la tendance baissière."
-    else:
-        signal = "🤝 HOLD"
-        commentaire = "Aucun signal clair détecté."
-    return signal, score, commentaire
-
-# --- Backtesting simple ---
-def backtest_strategy(df, initial_balance=1000):
-    balance = initial_balance
-    position = 0
-    for idx in range(1, len(df)):
-        signal, score, _ = generate_signal_and_score(df.iloc[:idx])
-        if signal == "📈 BUY" and balance > 0:
-            position = balance / df.iloc[idx]["close"]
-            balance = 0
-        elif signal == "📉 SELL" and position > 0:
-            balance = position * df.iloc[idx]["close"]
-            position = 0
-    if position > 0:
-        balance = position * df.iloc[-1]["close"]
-    return balance
-
-# --- Gestion du risque ---
-def manage_risk(signal, price, stop_loss_pct=0.03, take_profit_pct=0.05):
-    stop_loss = price * (1 - stop_loss_pct) if signal == "📈 BUY" else price * (1 + stop_loss_pct)
-    take_profit = price * (1 + take_profit_pct) if signal == "📈 BUY" else price * (1 - take_profit_pct)
-    return stop_loss, take_profit
-
 # --- Ecran d'accueil ---
 async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -166,15 +84,19 @@ async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Gestion des menus ---
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-
+    await query.answer()  # Répondre au CallbackQuery pour éviter un timeout
+    
     # Gérer les différentes options du menu
     if query.data == "menu_classement":
         await query.edit_message_text(text="Classement des tokens:")
-        # Ajouter ici la logique pour afficher le classement
+        # Ajouter ici la logique pour afficher le classement des tokens
+        await query.edit_message_text(text="Classement des tokens :\n1. Bitcoin\n2. Ethereum\n...")
     elif query.data == "menu_analyse":
         await query.edit_message_text(text="Sélectionne un token à analyser.")
-        # Ajouter ici la logique pour afficher l'analyse des tokens
+        # Ajouter ici la logique pour afficher l'analyse des tokens (ou demander une sélection)
+        await query.edit_message_text(text="Analyse des tokens :\n1. Bitcoin\n2. Ethereum\n...")
+    else:
+        await query.edit_message_text(text="Option non reconnue.")
 
 # --- Commande /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
