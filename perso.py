@@ -77,7 +77,7 @@ def compute_indicators(df):
 def generate_signal_and_score(df):
     latest = df.iloc[-1]
     score = 0
-    # Signal
+    commentaire = ""
     if (
         latest["EMA10"] > latest["SMA20"] and
         latest["RSI"] < 35 and
@@ -86,6 +86,7 @@ def generate_signal_and_score(df):
         signal = "BUY"
         score += abs(latest["EMA10"] - latest["SMA20"])
         score += max(0, 35 - latest["RSI"])
+        commentaire = "Forte probabilité de rebond technique (survente et tendance haussière naissante)."
     elif (
         latest["EMA10"] < latest["SMA20"] and
         latest["RSI"] > 65 and
@@ -94,41 +95,69 @@ def generate_signal_and_score(df):
         signal = "SELL"
         score += abs(latest["EMA10"] - latest["SMA20"])
         score += max(0, latest["RSI"] - 65)
+        commentaire = "Risque de correction (surachat et tendance baissière amorcée)."
     else:
         signal = "HOLD"
+        commentaire = "Aucun signal fort détecté."
         score = 0
-    return signal, score
+    return signal, score, commentaire
 
 async def classement(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Analyse des 20 premiers tokens (hors stablecoins)...")
+    await update.message.reply_text("Analyse des 20 premiers tokens (hors stablecoins)...\n")
     results = []
     for name, symbol in TOP_TOKENS:
-        df = get_binance_ohlc(symbol)
-        if df is None or len(df) < 21:
-            continue
-        df = compute_indicators(df)
-        signal, score = generate_signal_and_score(df)
-        if signal != "HOLD":
-            results.append({
-                "name": name.title(),
-                "symbol": symbol,
-                "signal": signal,
-                "score": score,
-                "price": df.iloc[-1]["close"]
-            })
+        try:
+            await update.message.reply_text(f"Analyse de {name.title()} ({symbol}) en cours...")
+            df = get_binance_ohlc(symbol)
+            if df is None or len(df) < 21:
+                await update.message.reply_text(f"Pas assez de données pour {name.title()} ({symbol}).")
+                continue
+            df = compute_indicators(df)
+            signal, score, commentaire = generate_signal_and_score(df)
+            latest = df.iloc[-1]
+            if signal != "HOLD":
+                msg = (
+                    f"Résultat pour {name.title()} ({symbol}):\n"
+                    f"Prix actuel : {latest['close']:.4f} USDT\n"
+                    f"EMA10 : {latest['EMA10']:.4f}\n"
+                    f"SMA20 : {latest['SMA20']:.4f}\n"
+                    f"RSI : {latest['RSI']:.2f}\n"
+                    f"Bollinger Lower : {latest['BB_lower']:.4f}\n"
+                    f"Bollinger Upper : {latest['BB_upper']:.4f}\n"
+                    f"Signal : {signal}\n"
+                    f"Score de confiance : {score:.2f}\n"
+                    f"Commentaire : {commentaire}\n"
+                )
+                await update.message.reply_text(msg)
+                results.append({
+                    "name": name.title(),
+                    "symbol": symbol,
+                    "signal": signal,
+                    "score": score,
+                    "price": latest["close"],
+                    "commentaire": commentaire
+                })
+            else:
+                await update.message.reply_text(f"Aucun signal fort détecté pour {name.title()} ({symbol}).")
+        except Exception as e:
+            await update.message.reply_text(f"Erreur lors de l'analyse de {name.title()} ({symbol}) : {e}")
+            logger.error(f"Erreur analyse {name} : {e}")
+
     if not results:
         await update.message.reply_text("Aucun signal fort détecté sur les 20 premiers tokens.")
         return
+
     # Classement par score décroissant
     results = sorted(results, key=lambda x: x["score"], reverse=True)
     top3 = results[:3]
-    msg = "Top 3 tokens avec les signaux les plus forts :\n"
+    msg = "🏆 Classement final : Top 3 tokens avec les signaux les plus forts :\n"
     for i, res in enumerate(top3, 1):
         msg += (
             f"\n{i}. {res['name']} ({res['symbol']})\n"
             f"   Prix : {res['price']:.4f} USDT\n"
             f"   Signal : {res['signal']}\n"
             f"   Score : {res['score']:.2f}\n"
+            f"   Commentaire : {res['commentaire']}\n"
         )
     await update.message.reply_text(msg)
 
