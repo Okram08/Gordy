@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import ta
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 )
@@ -125,8 +125,13 @@ def generate_signal_and_score(df):
         commentaire = "Aucun signal clair détecté."
     return signal, score, commentaire
 
-# --- Ecran d'accueil sans clavier ---
+# --- Ecran d'accueil ---
 async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🏆 Classement", callback_data="menu_classement")],
+        [InlineKeyboardButton("📊 Analyse", callback_data="menu_analyse")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     chat_id = (
         update.effective_chat.id
         if update.effective_chat
@@ -134,7 +139,15 @@ async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await context.bot.send_message(
         chat_id=chat_id,
-        text="👋 Bienvenue ! Que souhaitez-vous faire ?"
+        text="👋 Bienvenue ! Que souhaitez-vous faire ?",
+        reply_markup=reply_markup
+    )
+
+    # Supprimer le clavier interactif après l'affichage
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="Vous pouvez interagir uniquement avec les boutons.",
+        reply_markup=None
     )
 
 # --- Commande /start ---
@@ -146,16 +159,26 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
+    # Cache le clavier à chaque interaction
+    await query.answer()
+
     if data == "menu_classement":
         await classement_callback(update, context)
     elif data == "menu_analyse":
         await analyse_callback(update, context)
+
+    # Ici, à chaque fois que l'utilisateur interagit, le clavier disparaît
+    await query.edit_message_reply_markup(reply_markup=None)
 
 # --- Classement (callback) ---
 async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = query.message.chat_id
     message = await context.bot.send_message(chat_id=chat_id, text="🔎 Analyse des 20 tokens en cours...")
+
+    # Supprimer le clavier interactif
+    await query.edit_message_reply_markup(reply_markup=None)
+
     results = []
     progress_msg = ""
 
@@ -193,7 +216,6 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not results:
         await context.bot.edit_message_text("Aucun signal fort détecté.", chat_id=chat_id, message_id=message.message_id)
-        # Affiche l'écran d'accueil dans un NOUVEAU message
         await accueil(update, context)
         return
 
@@ -207,13 +229,17 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"   Commentaire : {res['commentaire']}\n"
         )
     await context.bot.edit_message_text(final_msg, chat_id=chat_id, message_id=message.message_id)
-    # Affiche l'écran d'accueil dans un NOUVEAU message
     await accueil(update, context)
 
 # --- Analyse (callback) ---
 async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
+        for name, symbol in TOP_TOKENS
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     chat_id = update.callback_query.message.chat_id
-    await context.bot.send_message(chat_id=chat_id, text="📊 Sélectionnez une crypto :")
+    await context.bot.send_message(chat_id=chat_id, text="📊 Sélectionnez une crypto :", reply_markup=reply_markup)
 
 # --- Analyse d'un token (callback) ---
 async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -244,7 +270,6 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         f"{commentaire}"
     )
     await context.bot.send_message(chat_id=chat_id, text=result)
-    # Affiche l'écran d'accueil dans un NOUVEAU message
     await accueil(update, context)
 
 # --- Main ---
