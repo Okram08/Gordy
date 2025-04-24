@@ -298,14 +298,20 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Tri alphabétique des tokens pour l'analyse
     keyboard = [
         [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
-        for name, symbol in TOP_TOKENS
+        for name, symbol in sorted(TOP_TOKENS, key=lambda x: x[0].lower())
     ]
     keyboard.append([InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     chat_id = update.callback_query.message.chat_id
-    await context.bot.send_message(chat_id=chat_id, text="📊 *Sélectionnez une crypto :*", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="📊 *Sélectionnez une crypto :*",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
