@@ -5,13 +5,12 @@ import pandas as pd
 from io import BytesIO
 from functools import lru_cache
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, Context
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     filters,
-    ContextTypes,
     ConversationHandler
 )
 from pycoingecko import CoinGeckoAPI
@@ -127,11 +126,11 @@ def prepare_data(df, features):
     y = to_categorical(np.array(y), num_classes=3)
     return train_test_split(X, y, test_size=1 - TRAIN_TEST_RATIO, shuffle=False)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def start(update: Update, context: Context) -> int:
     await update.message.reply_text("👋 Quel token veux-tu analyser (ex: bitcoin) ?")
     return ASK_TOKEN
 
-async def ask_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def ask_token(update: Update, context: Context) -> int:
     token = update.message.text.strip().lower()
     await analyze_and_reply(update, token)
     return ConversationHandler.END
@@ -161,12 +160,12 @@ async def analyze_and_reply(update: Update, token: str):
         if os.path.exists(model_path):
             model = load_model(model_path)
         else:
-            model = Sequential([ 
-                Input(shape=(X_train.shape[1], X_train.shape[2])), 
-                LSTM(64, return_sequences=True), 
-                Dropout(0.3), 
-                LSTM(32), 
-                Dropout(0.2), 
+            model = Sequential([  
+                Input(shape=(X_train.shape[1], X_train.shape[2])),
+                LSTM(64, return_sequences=True),
+                Dropout(0.3),
+                LSTM(32),
+                Dropout(0.2),
                 Dense(3, activation='softmax')
             ])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
@@ -217,7 +216,7 @@ async def analyze_and_reply(update: Update, token: str):
         logging.error(f"Erreur: {str(e)}")
         await update.message.reply_text(f"❌ Une erreur est survenue durant l'analyse.\n🛠 Détail: {str(e)}")
 
-async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_history(update: Update, context: Context):
     history = load_history()
     if history:
         messages = [
@@ -234,7 +233,9 @@ def main() -> None:
     application.add_handler(CommandHandler("history", show_history))
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
-        states={ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)]},
+        states={
+            ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_token)],
+        },
         fallbacks=[]
     )
     application.add_handler(conv_handler)
