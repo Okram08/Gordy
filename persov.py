@@ -5,6 +5,7 @@ import pandas as pd
 import ta
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 )
@@ -129,25 +130,38 @@ def generate_signal_and_score(df):
 async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🏆 Classement", callback_data="menu_classement")],
-        [InlineKeyboardButton("📊 Analyse", callback_data="menu_analyse")]
+        [InlineKeyboardButton("📊 Analyse", callback_data="menu_analyse")],
+        [InlineKeyboardButton("ℹ️ Aide", callback_data="menu_help")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     chat_id = (
         update.effective_chat.id
         if update.effective_chat
         else update.callback_query.message.chat_id
     )
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(
         chat_id=chat_id,
-        text="👋 Bienvenue ! Que souhaitez-vous faire ?",
-        reply_markup=reply_markup
+        text="👋 *Bienvenue !* Que souhaitez-vous faire ?",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
     )
 
 # --- Commande /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await accueil(update, context)
 
-# --- Handler du menu principal ---
+# --- Commande /help ---
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    aide = (
+        "*Aide du bot d'analyse crypto*\n\n"
+        "• Utilisez le menu pour accéder au classement ou analyser une crypto.\n"
+        "• Les signaux sont calculés à partir d'indicateurs techniques sur 1h.\n"
+        "• Cliquez sur « Retour » à tout moment pour revenir au menu principal.\n"
+        "• Pour toute question, contactez le développeur."
+    )
+    await update.message.reply_text(aide, parse_mode=ParseMode.MARKDOWN)
+
+# --- Handler du menu principal et navigation ---
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -156,15 +170,20 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await classement_callback(update, context)
     elif data == "menu_analyse":
         await analyse_callback(update, context)
+    elif data == "menu_help":
+        await help_callback(update, context)
+    elif data == "retour_accueil":
+        await accueil(update, context)
 
 # --- Classement (callback) ---
 async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = query.message.chat_id
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     message = await context.bot.send_message(chat_id=chat_id, text="🔎 Analyse des 20 tokens en cours...")
+
     results = []
     progress_msg = ""
-
     for idx, (name, symbol) in enumerate(TOP_TOKENS, 1):
         try:
             df = get_binance_ohlc(symbol)
@@ -191,7 +210,7 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 progress_msg += f"➖ {name.title()} : Aucun signal fort.\n"
 
             await context.bot.edit_message_text(progress_msg, chat_id=chat_id, message_id=message.message_id)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.2)
         except Exception as e:
             logger.error(f"Erreur analyse {name}: {e}")
             progress_msg += f"⚠️ {name.title()} : erreur pendant l'analyse.\n"
@@ -203,16 +222,22 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     results = sorted(results, key=lambda x: x["score"], reverse=True)[:3]
-    final_msg = progress_msg + "\n🏆 Top 3 tokens avec les signaux les plus forts :\n"
+    final_msg = progress_msg + "\n*🏆 Top 3 tokens avec les signaux les plus forts :*\n"
     for i, res in enumerate(results, 1):
         final_msg += (
-            f"\n{i}. {res['name']} ({res['symbol']})\n"
-            f"   Prix : {res['price']:.4f} USDT\n"
-            f"   Signal : {res['signal']} | Score : {res['score']:.2f}\n"
-            f"   Commentaire : {res['commentaire']}\n"
+            f"\n*{i}. {res['name']}* (`{res['symbol']}`)\n"
+            f"   Prix : `{res['price']:.4f}` USDT\n"
+            f"   Signal : {res['signal']} | Score : `{res['score']:.2f}`\n"
+            f"   _{res['commentaire']}_\n"
         )
-    await context.bot.edit_message_text(final_msg, chat_id=chat_id, message_id=message.message_id)
-    await accueil(update, context)
+    keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]]
+    await context.bot.edit_message_text(
+        final_msg,
+        chat_id=chat_id,
+        message_id=message.message_id,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 # --- Analyse (callback) ---
 async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -220,9 +245,10 @@ async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
         for name, symbol in TOP_TOKENS
     ]
+    # PAS de bouton retour ici !
     reply_markup = InlineKeyboardMarkup(keyboard)
     chat_id = update.callback_query.message.chat_id
-    await context.bot.send_message(chat_id=chat_id, text="📊 Sélectionnez une crypto :", reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=chat_id, text="📊 *Sélectionnez une crypto :*", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 # --- Analyse d'un token (callback) ---
 async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -230,7 +256,8 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
     chat_id = query.message.chat_id
     symbol = query.data.replace("analyse_", "")
     name = next((name.title() for name, sym in TOP_TOKENS if sym == symbol), symbol)
-    await context.bot.send_message(chat_id=chat_id, text=f"🔍 Analyse de {name} en cours...")
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    await context.bot.send_message(chat_id=chat_id, text=f"🔍 *Analyse de {name} en cours...*", parse_mode=ParseMode.MARKDOWN)
 
     df = get_binance_ohlc(symbol)
     if df is None or len(df) < 50:
@@ -243,23 +270,52 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
     latest = df.iloc[-1]
 
     result = (
-        f"📊 Résultat pour {name} ({symbol}):\n"
-        f"Prix : {latest['close']:.4f} USDT\n"
-        f"EMA10 : {latest['EMA10']:.4f} | SMA20 : {latest['SMA20']:.4f} | SMA200 : {latest['SMA200']:.4f}\n"
-        f"RSI : {latest['RSI']:.2f} | MACD : {latest['MACD']:.4f} | ADX : {latest['ADX']:.2f}\n"
-        f"Bollinger : [{latest['BB_lower']:.4f} ; {latest['BB_upper']:.4f}]\n"
-        f"Volume actuel : {latest['volume']:.2f} | Moyenne : {latest['volume_mean']:.2f}\n"
-        f"Signal : {signal} | Score : {score:.2f}\n"
-        f"{commentaire}"
+        f"*📊 Résultat pour {name} ({symbol}):*\n"
+        f"*Prix* : `{latest['close']:.4f}` USDT\n"
+        f"*EMA10* : `{latest['EMA10']:.4f}` | *SMA20* : `{latest['SMA20']:.4f}` | *SMA200* : `{latest['SMA200']:.4f}`\n"
+        f"*RSI* : `{latest['RSI']:.2f}` | *MACD* : `{latest['MACD']:.4f}` | *ADX* : `{latest['ADX']:.2f}`\n"
+        f"*Bollinger* : [`{latest['BB_lower']:.4f}` ; `{latest['BB_upper']:.4f}`]\n"
+        f"*Volume actuel* : `{latest['volume']:.2f}` | *Moyenne* : `{latest['volume_mean']:.2f}`\n"
+        f"*Signal* : {signal} | *Score* : `{score:.2f}`\n"
+        f"_{commentaire}_"
     )
-    await context.bot.send_message(chat_id=chat_id, text=result)
-    await accueil(update, context)
+    # On laisse le bouton retour ici pour revenir à la liste des cryptos
+    keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="menu_analyse")]]
+    await context.bot.send_message(chat_id=chat_id, text=result, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+
+# --- Aide (callback) ---
+async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    chat_id = query.message.chat_id
+    aide = (
+        "*Aide du bot d'analyse crypto*\n\n"
+        "• Utilisez le menu pour accéder au classement ou analyser une crypto.\n"
+        "• Les signaux sont calculés à partir d'indicateurs techniques sur 1h.\n"
+        "• Cliquez sur « Retour » à tout moment pour revenir au menu principal.\n"
+        "• Pour toute question, contactez le développeur."
+    )
+    keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]]
+    await context.bot.send_message(chat_id=chat_id, text=aide, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+
+# --- Gestion des erreurs ---
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Exception while handling an update:", exc_info=context.error)
+    try:
+        if update and hasattr(update, "effective_chat") and update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⚠️ Une erreur est survenue. Merci de réessayer ou de contacter l'administrateur."
+            )
+    except Exception as e:
+        logger.error(f"Erreur lors de l'envoi du message d'erreur : {e}")
 
 # --- Main ---
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu_"))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CallbackQueryHandler(menu_handler, pattern="^(menu_|retour_|help)"))
     app.add_handler(CallbackQueryHandler(analyse_token_callback, pattern="^analyse_"))
+    app.add_error_handler(error_handler)
     logger.info("Bot lancé et en attente de commandes.")
     app.run_polling()
