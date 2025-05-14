@@ -213,7 +213,7 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     chat_id = query.message.chat_id
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-    message = await context.bot.send_message(chat_id=chat_id, text="🔎 Analyse des 20 tokens en cours...")
+    message = await context.bot.send_message(chat_id=chat_id, text="🔎 Analyse des tokens de Luca en cours...")
 
     results = []
     progress_msg = ""
