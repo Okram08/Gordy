@@ -197,17 +197,25 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     msg = (
         f"*Analyse de {name.title()} ({symbol})*\n"
-        f"Prix : `{latest['close']:.2f}` USDT\n"
+        f"Prix actuel : `{latest['close']:.2f}` USDT\n"
         f"Signal : {signal}\n"
         f"Score : `{score}/7` | Confiance : `{confiance}/10` ({confiance_txt})\n"
         f"_{commentaire}_\n"
     )
     if signal != "🤝 HOLD":
         msg += (
-            f"\n🎯 *Take Profit* : `{take_profit:.4f}`"
-            f"\n🛑 *Stop Loss* : `{stop_loss:.4f}`"
+            f"\n🎯 *Take Profit* : `{take_profit:.4f}`\n"
+            f"🛑 *Stop Loss* : `{stop_loss:.4f}`"
         )
-    await update.callback_query.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]
+    ]
+    await update.callback_query.message.reply_text(
+        msg,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = await update.callback_query.message.reply_text("🔄 Chargement du classement...")
