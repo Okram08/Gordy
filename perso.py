@@ -25,24 +25,12 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TOP_TOKENS = [
     ("bitcoin", "BTCUSDT"),
     ("ethereum", "ETHUSDT"),
-    ("ripple", "XRPUSDT"),
-    ("bnb", "BNBUSDT"),
     ("solana", "SOLUSDT"),
     ("dogecoin", "DOGEUSDT"),
     ("cardano", "ADAUSDT"),
-    ("tron", "TRXUSDT"),
-    ("sui", "SUIUSDT"),
-    ("chainlink", "LINKUSDT"),
-    ("avalanche", "AVAXUSDT"),
-    ("stellar", "XLMUSDT"),
-    ("leo", "LEOUSDT"),
-    ("shiba inu", "SHIBUSDT"),
-    ("toncoin", "TONUSDT"),
-    ("hedera", "HBARUSDT"),
-    ("bitcoin cash", "BCHUSDT"),
-    ("polkadot", "DOTUSDT"),
-    ("litecoin", "LTCUSDT"),
-    ("polygon", "MATICUSDT"),
+    ("sonic", "SUSDT"),
+    ("aave", "AAVEUSDT"),
+    ("virtual", "VIRTUALUSDT"),
 ]
 
 def get_binance_ohlc(symbol, interval="1h", limit=250):
