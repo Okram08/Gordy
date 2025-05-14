@@ -9,7 +9,6 @@ from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 )
-import asyncio
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s:%(message)s")
@@ -73,10 +72,6 @@ def compute_indicators(df):
 
 def generate_signal_and_score(df):
     latest = df.iloc[-1]
-    for key in ["SMA200", "BB_upper", "BB_lower"]:
-        if pd.isna(latest[key]):
-            latest[key] = latest["close"]
-
     score_buy = 0
     score_sell = 0
 
@@ -132,7 +127,7 @@ def generate_signal_and_score(df):
         confiance_txt = "Faible"
         stop_loss = take_profit = None
 
-    return signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt
+    return signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest
 
 # --- Telegram Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -192,10 +187,9 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         await update.callback_query.message.reply_text("❌ Données insuffisantes.")
         return
     df = compute_indicators(df)
-    signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt = generate_signal_and_score(df)
-    latest = df.iloc[-1]
-
-    # Message détaillé avec indicateurs et icônes
+    signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest = generate_signal_and_score(df)
+    
+    # Analyse détaillée avec croix (❌) ou coche (✅)
     valid_icons = "✅"
     invalid_icons = "❌"
     indicators = {
@@ -211,7 +205,7 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     indicator_status = ""
     for indicator, label in indicators.items():
-        status = valid_icons if latest[indicator] else invalid_icons
+        status = valid_icons if (latest[indicator] and indicator != "RSI" and indicator != "ADX") else invalid_icons
         indicator_status += f"{status} {label}\n"
 
     msg = (
@@ -245,7 +239,7 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         df = get_binance_ohlc(symbol)
         if df is None: continue
         df = compute_indicators(df)
-        signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt = generate_signal_and_score(df)
+        signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest = generate_signal_and_score(df)
         if signal != "🤝 HOLD":
             results.append((name.title(), signal, score, confiance, commentaire))
 
