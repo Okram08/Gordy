@@ -1,8 +1,5 @@
-python-telegram-bot==20.7
-python-dotenv
-numpy
+requests
 pandas
-matplotlib
-scikit-learn
-pycoingecko
-tensorflow-cpu==2.16.1
+ta
+python-dotenv
+python-telegram-bot
