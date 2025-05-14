@@ -195,13 +195,34 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
     signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt = generate_signal_and_score(df)
     latest = df.iloc[-1]
 
+    # Message détaillé avec indicateurs et icônes
+    valid_icons = "✅"
+    invalid_icons = "❌"
+    indicators = {
+        "SMA200": "Moyenne mobile 200 (SMA200)",
+        "EMA10": "Moyenne mobile exponentielle 10 (EMA10)",
+        "RSI": "RSI (Relative Strength Index)",
+        "MACD": "MACD",
+        "ADX": "ADX",
+        "BB_lower": "Bollinger Bands Lower",
+        "BB_upper": "Bollinger Bands Upper",
+        "volume_mean": "Volume moyen"
+    }
+
+    indicator_status = ""
+    for indicator, label in indicators.items():
+        status = valid_icons if latest[indicator] else invalid_icons
+        indicator_status += f"{status} {label}\n"
+
     msg = (
         f"*Analyse de {name.title()} ({symbol})*\n"
         f"Prix actuel : `{latest['close']:.2f}` USDT\n"
         f"Signal : {signal}\n"
         f"Score : `{score}/7` | Confiance : `{confiance}/10` ({confiance_txt})\n"
-        f"_{commentaire}_\n"
+        f"_{commentaire}_\n\n"
+        f"*Indicateurs :*\n{indicator_status}\n"
     )
+    
     if signal != "🤝 HOLD":
         msg += (
             f"\n🎯 *Take Profit* : `{take_profit:.4f}`\n"
@@ -236,7 +257,10 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg = "*🏆 Classement des signaux forts :*\n\n"
     for i, (name, signal, score, confiance, commentaire) in enumerate(results, 1):
         msg += f"{i}. *{name}* — {signal} (Score {score}/7, {confiance}/10)\n_{commentaire}_\n\n"
-    await message.edit_text(msg, parse_mode=ParseMode.MARKDOWN)
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]
+    ]
+    await message.edit_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Exception:", exc_info=context.error)
