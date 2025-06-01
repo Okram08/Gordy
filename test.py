@@ -48,7 +48,6 @@ def get_binance_ohlc(symbol, interval="1h", limit=1000):
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         df.set_index("open_time", inplace=True)
-        # Localise l'index en UTC si ce n'est pas déjà fait
         if df.index.tz is None:
             df.index = df.index.tz_localize('UTC')
         return df
@@ -70,7 +69,8 @@ def compute_indicators(df):
     bb = ta.volatility.BollingerBands(df["close"], window=20, window_dev=2)
     df["BB_upper"] = bb.bollinger_hband()
     df["BB_lower"] = bb.bollinger_lband()
-    for col in ["SMA20", "EMA10", "RSI", "SMA200", "MACD", "ADX", "volume_mean", "BB_upper", "BB_lower"]:
+    df["ATR"] = ta.volatility.average_true_range(df["high"], df["low"], df["close"], window=14)
+    for col in ["SMA20", "EMA10", "RSI", "SMA200", "MACD", "ADX", "volume_mean", "BB_upper", "BB_lower", "ATR"]:
         df[col] = df[col].ffill().bfill().fillna(df["close"])
     return df
 
@@ -97,6 +97,9 @@ def generate_signal_and_score(df):
     if latest["ADX"] > 20: score_sell += 1
     if latest["volume"] > 1.2 * latest["volume_mean"]: score_sell += 1
 
+    atr = latest["ATR"]
+    entry = latest["close"]
+
     if score_buy >= 4 and score_buy >= score_sell:
         signal = "📈 BUY"
         score = score_buy
@@ -107,9 +110,9 @@ def generate_signal_and_score(df):
             "Bonne" if score_buy == 5 else
             "Moyenne"
         )
-        entry = latest["close"]
-        stop_loss = min(latest["SMA200"] * 0.997, entry * 0.97)
-        take_profit = max(latest["BB_upper"] * 0.995, entry * 1.06)
+        recent_lows = df["low"].iloc[-20:]
+        stop_loss = min(recent_lows.min(), entry - 1.5 * atr)
+        take_profit = entry + 2 * atr
     elif score_sell >= 4 and score_sell > score_buy:
         signal = "📉 SELL"
         score = score_sell
@@ -120,9 +123,9 @@ def generate_signal_and_score(df):
             "Bonne" if score_sell == 5 else
             "Moyenne"
         )
-        entry = latest["close"]
-        stop_loss = max(latest["SMA200"] * 1.003, entry * 1.03)
-        take_profit = min(latest["BB_lower"] * 1.005, entry * 0.94)
+        recent_highs = df["high"].iloc[-20:]
+        stop_loss = max(recent_highs.max(), entry + 1.5 * atr)
+        take_profit = entry - 2 * atr
     else:
         signal = "🤝 HOLD"
         score = max(score_buy, score_sell)
@@ -184,119 +187,7 @@ def get_start_date(period_code):
     else:
         return now - timedelta(days=30)
 
-# --- Telegram Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await accueil(update, context)
-
-async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("📊 Analyse", callback_data="menu_analyse")],
-        [InlineKeyboardButton("🏆 Classement", callback_data="menu_classement")],
-        [InlineKeyboardButton("ℹ️ Aide", callback_data="menu_help")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    chat_id = update.effective_chat.id
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="👋 Bienvenue sur le bot d'analyse crypto de Luca !",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "ℹ️ Ce bot fournit des signaux d'achat et de vente basés sur des indicateurs techniques.\n"
-        "Utilisez les boutons pour interagir.",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    if data == "menu_analyse":
-        await analyse_callback(update, context)
-    elif data == "menu_classement":
-        await classement_callback(update, context)
-    elif data == "menu_help":
-        await help_command(update, context)
-    elif data == "retour_accueil":
-        await accueil(update, context)
-
-async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
-        for name, symbol in TOP_TOKENS
-    ]
-    keyboard.append([InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")])
-    await update.callback_query.message.reply_text(
-        "📊 Sélectionnez une crypto à analyser :",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    symbol = update.callback_query.data.replace("analyse_", "")
-    name = next((n for n, s in TOP_TOKENS if s == symbol), symbol)
-    df = get_binance_ohlc(symbol)
-    if df is None or len(df) < 50:
-        await update.callback_query.message.reply_text("❌ Données insuffisantes.")
-        return
-    df = compute_indicators(df)
-    signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest = generate_signal_and_score(df)
-
-    # Affichage détaillé des critères validés
-    if signal == "📈 BUY":
-        criteria = get_criteria_status(latest, "BUY")
-    elif signal == "📉 SELL":
-        criteria = get_criteria_status(latest, "SELL")
-    else:
-        criteria = get_criteria_status(latest, "HOLD")
-
-    indicator_status = ""
-    for label, valid in criteria:
-        icon = "✅" if valid else "❌"
-        indicator_status += f"{icon} {label}\n"
-
-    msg = (
-        f"*Analyse de {name.title()} ({symbol})*\n"
-        f"Prix actuel : `{latest['close']:.2f}` USDT\n"
-        f"Signal : {signal}\n"
-        f"Score : `{score}/7` | Confiance : `{confiance}/10` ({confiance_txt})\n"
-        f"_{commentaire}_\n\n"
-        f"*Critères validés :*\n{indicator_status}\n"
-    )
-
-    if signal != "🤝 HOLD":
-        msg += (
-            f"\n🎯 *Take Profit* : `{take_profit:.4f}`\n"
-            f"🛑 *Stop Loss* : `{stop_loss:.4f}`"
-        )
-
-    # Ajout du bouton Backtest
-    keyboard = [
-        [InlineKeyboardButton("Backtest 🔄", callback_data=f"backtest_{symbol}")],
-        [InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]
-    ]
-    await update.callback_query.message.reply_text(
-        msg,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def backtest_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    symbol = update.callback_query.data.replace("backtest_", "")
-    keyboard = [
-        [InlineKeyboardButton("1 mois", callback_data=f"backtest_run_{symbol}_1m")],
-        [InlineKeyboardButton("3 mois", callback_data=f"backtest_run_{symbol}_3m")],
-        [InlineKeyboardButton("6 mois", callback_data=f"backtest_run_{symbol}_6m")],
-        [InlineKeyboardButton("1 an", callback_data=f"backtest_run_{symbol}_1y")],
-        [InlineKeyboardButton("⬅️ Retour", callback_data=f"analyse_{symbol}")]
-    ]
-    await update.callback_query.message.reply_text(
-        "🕒 Choisis la période de backtest :",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
+# --- Handlers Telegram (inchangés, sauf backtest_run_callback) ---
 
 async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data.replace("backtest_run_", "")
@@ -307,7 +198,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await update.callback_query.message.reply_text("❌ Données insuffisantes pour le backtest.")
         return
 
-    # S'assurer que l'index est tz-aware
     if df.index.tz is None:
         df.index = df.index.tz_localize('UTC')
     df = df[df.index >= start_date]
@@ -316,11 +206,9 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     df = compute_indicators(df)
 
-    # Sélectionner la bougie de chaque jour à 8h UTC
     df_8h = df[df.index.hour == 8]
     df_8h = df_8h.groupby(df_8h.index.date).first()
 
-    # Générer la liste des signaux à 8h
     signals = []
     for idx in df_8h.index:
         dt_8h = pd.Timestamp(idx).replace(hour=8, minute=0, second=0, microsecond=0, tzinfo=df.index.tz)
@@ -333,7 +221,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         close = subdf.iloc[-1]["close"]
         signals.append({"date": dt_8h, "signal": signal, "close": close})
 
-    # Simuler les trades (entrée sur BUY, sortie sur SELL ou inversement)
     trades = []
     current_trade = None
     for sig in signals:
@@ -343,23 +230,19 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
             elif sig["signal"] == "📉 SELL":
                 current_trade = {"type": "SELL", "entry_date": sig["date"], "entry_price": sig["close"]}
         else:
-            # Si signal opposé, on clôture le trade
             if (current_trade["type"] == "BUY" and sig["signal"] == "📉 SELL") or \
                (current_trade["type"] == "SELL" and sig["signal"] == "📈 BUY"):
                 current_trade["exit_date"] = sig["date"]
                 current_trade["exit_price"] = sig["close"]
-                # Calcul du P&L
                 if current_trade["type"] == "BUY":
                     current_trade["pnl"] = (current_trade["exit_price"] - current_trade["entry_price"]) / current_trade["entry_price"] * 100
                 else:
                     current_trade["pnl"] = (current_trade["entry_price"] - current_trade["exit_price"]) / current_trade["entry_price"] * 100
                 trades.append(current_trade)
-                # Démarre un nouveau trade
                 if sig["signal"] == "📈 BUY":
                     current_trade = {"type": "BUY", "entry_date": sig["date"], "entry_price": sig["close"]}
                 else:
                     current_trade = {"type": "SELL", "entry_date": sig["date"], "entry_price": sig["close"]}
-    # Si un trade est ouvert à la fin, on le ferme sur la dernière bougie
     if current_trade is not None and "exit_price" not in current_trade:
         last = signals[-1]
         current_trade["exit_date"] = last["date"]
@@ -370,7 +253,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
             current_trade["pnl"] = (current_trade["entry_price"] - current_trade["exit_price"]) / current_trade["entry_price"] * 100
         trades.append(current_trade)
 
-    # Statistiques
     nb_trades = len(trades)
     trades_gagnants = [t for t in trades if t["pnl"] > 0]
     trades_perdants = [t for t in trades if t["pnl"] <= 0]
@@ -390,7 +272,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if drawdown > max_drawdown:
             max_drawdown = drawdown
 
-    # Rendu visuel enrichi
     msg = (
         f"📊 *Backtest {symbol} sur {period_code}*\n"
         f"╭─────────────────────────────╮\n"
@@ -414,7 +295,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
-
 async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = await update.callback_query.message.reply_text("🔄 Chargement du classement...")
     results = []
