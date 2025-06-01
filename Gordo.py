@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# --- Cryptos analysées ---
 TOP_TOKENS = [
     ("bitcoin", "BTCUSDT"),
     ("ethereum", "ETHUSDT"),
@@ -31,7 +30,6 @@ TOP_TOKENS = [
     ("virtual", "VIRTUALUSDT"),
 ]
 
-# --- Fonctions données et indicateurs ---
 def get_binance_ohlc(symbol, interval="1h", limit=1000):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
@@ -136,7 +134,20 @@ def generate_signal_and_score(df):
 
     return signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest
 
-# --- Backtest avec trailing stop et prise de profit partielle ---
+def get_start_date(period_code):
+    now = datetime.now(timezone.utc)
+    if period_code == "1m":
+        return now - timedelta(days=30)
+    elif period_code == "3m":
+        return now - timedelta(days=90)
+    elif period_code == "6m":
+        return now - timedelta(days=180)
+    elif period_code == "1y":
+        return now - timedelta(days=365)
+    else:
+        return now - timedelta(days=30)
+
+# --- Backtest avec prise de profit partielle et trailing stop sur le reste ---
 async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data.replace("backtest_run_", "")
     symbol, period_code = data.rsplit("_", 1)
@@ -190,7 +201,7 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         take_profit = sig["take_profit"]
         atr = sig["atr"]
 
-        # Prise de profit partielle à +1 ATR, trailing stop à +0.5 ATR après prise partielle
+        # Prise de profit partielle à +1 ATR, trailing stop sur le reste
         partial_tp = entry_price + atr if trade_type == "BUY" else entry_price - atr
         trailing_active = False
         trailing_stop = None
@@ -210,11 +221,9 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
             # Prise de profit partielle
             if not partial_taken:
                 if (trade_type == "BUY" and row["high"] >= partial_tp) or (trade_type == "SELL" and row["low"] <= partial_tp):
-                    # Prise de profit sur la moitié
                     partial_taken = True
                     size_left = 0.5
                     pnl_partial = ((partial_tp - entry_price) / entry_price * 100) * 0.5 if trade_type == "BUY" else ((entry_price - partial_tp) / entry_price * 100) * 0.5
-                    # Active le trailing stop sur le reste
                     trailing_active = True
                     if trade_type == "BUY":
                         trailing_stop = partial_tp - 0.5 * atr
@@ -280,7 +289,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     exit_price = row["open"]
                     break
 
-        # Si pas de sortie, on sort à la dernière bougie
         if exit_reason is None:
             last_idx = df_after.index[-1] if not df_after.empty else df.index[-1]
             if trade_type == "BUY":
@@ -346,6 +354,7 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
+
 async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = await update.callback_query.message.reply_text("🔄 Chargement du classement...")
     results = []
