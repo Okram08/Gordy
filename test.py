@@ -170,8 +170,10 @@ def get_criteria_status(latest, signal_type):
     return criteria
 
 # --- Fonctions utilitaires pour le backtest ---
+from datetime import datetime, timezone, timedelta
+
 def get_start_date(period_code):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if period_code == "1m":
         return now - timedelta(days=30)
     elif period_code == "3m":
@@ -182,6 +184,7 @@ def get_start_date(period_code):
         return now - timedelta(days=365)
     else:
         return now - timedelta(days=30)
+
 
 # --- Telegram Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
