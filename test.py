@@ -310,7 +310,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # S'assurer que l'index est tz-aware
     if df.index.tz is None:
         df.index = df.index.tz_localize('UTC')
-    # Comparer avec start_date (déjà tz-aware)
     df = df[df.index >= start_date]
     if len(df) < 50:
         await update.callback_query.message.reply_text("❌ Pas assez de données pour cette période.")
@@ -319,30 +318,92 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Sélectionner la bougie de chaque jour à 8h UTC
     df_8h = df[df.index.hour == 8]
-    # Garder une bougie par jour (au cas où il y en aurait plusieurs à 8h)
     df_8h = df_8h.groupby(df_8h.index.date).first()
 
-    buy_signals = 0
-    sell_signals = 0
+    # Générer la liste des signaux à 8h
+    signals = []
     for idx in df_8h.index:
-        # Recréer la date à 8h UTC
         dt_8h = pd.Timestamp(idx).replace(hour=8, minute=0, second=0, microsecond=0, tzinfo=df.index.tz)
         if dt_8h < df.index[0]:
-            continue  # Trop tôt, pas assez d'historique
+            continue
         subdf = df.loc[df.index <= dt_8h]
         if len(subdf) < 50:
             continue
         signal, *_ = generate_signal_and_score(subdf)
-        if signal == "📈 BUY":
-            buy_signals += 1
-        elif signal == "📉 SELL":
-            sell_signals += 1
+        close = subdf.iloc[-1]["close"]
+        signals.append({"date": dt_8h, "signal": signal, "close": close})
 
+    # Simuler les trades (entrée sur BUY, sortie sur SELL ou inversement)
+    trades = []
+    current_trade = None
+    for sig in signals:
+        if current_trade is None:
+            if sig["signal"] == "📈 BUY":
+                current_trade = {"type": "BUY", "entry_date": sig["date"], "entry_price": sig["close"]}
+            elif sig["signal"] == "📉 SELL":
+                current_trade = {"type": "SELL", "entry_date": sig["date"], "entry_price": sig["close"]}
+        else:
+            # Si signal opposé, on clôture le trade
+            if (current_trade["type"] == "BUY" and sig["signal"] == "📉 SELL") or \
+               (current_trade["type"] == "SELL" and sig["signal"] == "📈 BUY"):
+                current_trade["exit_date"] = sig["date"]
+                current_trade["exit_price"] = sig["close"]
+                # Calcul du P&L
+                if current_trade["type"] == "BUY":
+                    current_trade["pnl"] = (current_trade["exit_price"] - current_trade["entry_price"]) / current_trade["entry_price"] * 100
+                else:
+                    current_trade["pnl"] = (current_trade["entry_price"] - current_trade["exit_price"]) / current_trade["entry_price"] * 100
+                trades.append(current_trade)
+                # Démarre un nouveau trade
+                if sig["signal"] == "📈 BUY":
+                    current_trade = {"type": "BUY", "entry_date": sig["date"], "entry_price": sig["close"]}
+                else:
+                    current_trade = {"type": "SELL", "entry_date": sig["date"], "entry_price": sig["close"]}
+    # Si un trade est ouvert à la fin, on le ferme sur la dernière bougie
+    if current_trade is not None and "exit_price" not in current_trade:
+        last = signals[-1]
+        current_trade["exit_date"] = last["date"]
+        current_trade["exit_price"] = last["close"]
+        if current_trade["type"] == "BUY":
+            current_trade["pnl"] = (current_trade["exit_price"] - current_trade["entry_price"]) / current_trade["entry_price"] * 100
+        else:
+            current_trade["pnl"] = (current_trade["entry_price"] - current_trade["exit_price"]) / current_trade["entry_price"] * 100
+        trades.append(current_trade)
+
+    # Statistiques
+    nb_trades = len(trades)
+    trades_gagnants = [t for t in trades if t["pnl"] > 0]
+    trades_perdants = [t for t in trades if t["pnl"] <= 0]
+    taux_reussite = (len(trades_gagnants) / nb_trades) * 100 if nb_trades else 0
+    pnl_total = sum(t["pnl"] for t in trades)
+    pnl_moyen = pnl_total / nb_trades if nb_trades else 0
+    max_drawdown = 0
+    equity = 0
+    peak = 0
+    equity_curve = []
+    for t in trades:
+        equity += t["pnl"]
+        equity_curve.append(equity)
+        if equity > peak:
+            peak = equity
+        drawdown = peak - equity
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+
+    # Rendu visuel enrichi
     msg = (
         f"📊 *Backtest {symbol} sur {period_code}*\n"
-        f"Nombre de signaux BUY (à 8h UTC) : {buy_signals}\n"
-        f"Nombre de signaux SELL (à 8h UTC) : {sell_signals}\n"
-        f"Période : depuis {start_date.date()} ({len(df_8h)} jours analysés)"
+        f"╭─────────────────────────────╮\n"
+        f"│ Jours analysés : *{len(df_8h)}*\n"
+        f"│ Trades simulés : *{nb_trades}*\n"
+        f"│ 🟩 Trades gagnants : *{len(trades_gagnants)}*\n"
+        f"│ 🟥 Trades perdants : *{len(trades_perdants)}*\n"
+        f"│ 📈 Taux de réussite : *{taux_reussite:.1f}%*\n"
+        f"│ 💰 P&L total : *{pnl_total:.2f}%*\n"
+        f"│ ⚖️ P&L moyen/trade : *{pnl_moyen:.2f}%*\n"
+        f"│ 📉 Max drawdown : *{max_drawdown:.2f}%*\n"
+        f"╰─────────────────────────────╯\n"
+        f"_Entrée/Sortie sur chaque changement de signal à 8h UTC._"
     )
     keyboard = [
         [InlineKeyboardButton("⬅️ Retour", callback_data=f"backtest_{symbol}")],
