@@ -9,7 +9,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 )
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s:%(message)s")
@@ -48,6 +48,9 @@ def get_binance_ohlc(symbol, interval="1h", limit=1000):
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         df.set_index("open_time", inplace=True)
+        # Ajout : rendre l'index tz-aware en UTC
+        if df.index.tz is None:
+            df.index = df.index.tz_localize('UTC')
         return df
     except Exception as e:
         logger.error(f"Erreur récupération données Binance : {e}")
@@ -130,7 +133,6 @@ def generate_signal_and_score(df):
 
     return signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest
 
-# --- Critères validés ---
 def get_criteria_status(latest, signal_type):
     if signal_type == "BUY":
         criteria = [
@@ -169,9 +171,6 @@ def get_criteria_status(latest, signal_type):
         ]
     return criteria
 
-# --- Fonctions utilitaires pour le backtest ---
-from datetime import datetime, timezone, timedelta
-
 def get_start_date(period_code):
     now = datetime.now(timezone.utc)
     if period_code == "1m":
@@ -184,7 +183,6 @@ def get_start_date(period_code):
         return now - timedelta(days=365)
     else:
         return now - timedelta(days=30)
-
 
 # --- Telegram Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -236,7 +234,6 @@ async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
-# --- Analyse détaillée + bouton Backtest ---
 async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = update.callback_query.data.replace("analyse_", "")
     name = next((n for n, s in TOP_TOKENS if s == symbol), symbol)
@@ -286,7 +283,6 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode=ParseMode.MARKDOWN
     )
 
-# --- Menu choix période Backtest ---
 async def backtest_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = update.callback_query.data.replace("backtest_", "")
     keyboard = [
@@ -302,7 +298,7 @@ async def backtest_menu_callback(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode=ParseMode.MARKDOWN
     )
 
-# --- Exécution du backtest ---
+# --- Exécution du backtest : uniquement la bougie à 8h UTC chaque jour ---
 async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data.replace("backtest_run_", "")
     symbol, period_code = data.rsplit("_", 1)
@@ -311,25 +307,38 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if df is None or len(df) < 50:
         await update.callback_query.message.reply_text("❌ Données insuffisantes pour le backtest.")
         return
-    df = df[df.index >= pd.Timestamp(start_date)]
+
+    # S'assurer que l'index est tz-aware
+    if df.index.tz is None:
+        df.index = df.index.tz_localize('UTC')
+    df = df[df.index >= pd.Timestamp(start_date, tz='UTC')]
     if len(df) < 50:
         await update.callback_query.message.reply_text("❌ Pas assez de données pour cette période.")
         return
     df = compute_indicators(df)
+
+    # Sélectionner la bougie de chaque jour à 8h UTC
+    df_8h = df[df.index.hour == 8]
+    df_8h = df_8h.groupby(df_8h.index.date).first()
+
     buy_signals = 0
     sell_signals = 0
-    for i in range(50, len(df)):  # commence après 50 bougies pour fiabilité des indicateurs
-        subdf = df.iloc[:i+1]
+    for idx in df_8h.index:
+        dt_8h = pd.Timestamp(idx).replace(hour=8, minute=0, second=0, microsecond=0, tzinfo=df.index.tz)
+        subdf = df.loc[df.index <= dt_8h]
+        if len(subdf) < 50:
+            continue
         signal, *_ = generate_signal_and_score(subdf)
         if signal == "📈 BUY":
             buy_signals += 1
         elif signal == "📉 SELL":
             sell_signals += 1
+
     msg = (
         f"📊 *Backtest {symbol} sur {period_code}*\n"
-        f"Nombre de signaux BUY : {buy_signals}\n"
-        f"Nombre de signaux SELL : {sell_signals}\n"
-        f"Période : depuis {start_date.date()} ({len(df)} bougies)"
+        f"Nombre de signaux BUY (à 8h UTC) : {buy_signals}\n"
+        f"Nombre de signaux SELL (à 8h UTC) : {sell_signals}\n"
+        f"Période : depuis {start_date.date()} ({len(df_8h)} jours analysés)"
     )
     keyboard = [
         [InlineKeyboardButton("⬅️ Retour", callback_data=f"backtest_{symbol}")],
