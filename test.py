@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# --- Cryptos analysées ---
 TOP_TOKENS = [
     ("bitcoin", "BTCUSDT"),
     ("ethereum", "ETHUSDT"),
@@ -31,7 +30,6 @@ TOP_TOKENS = [
     ("virtual", "VIRTUALUSDT"),
 ]
 
-# --- Fonctions données et indicateurs ---
 def get_binance_ohlc(symbol, interval="1h", limit=1000):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
@@ -187,7 +185,7 @@ def get_start_date(period_code):
     else:
         return now - timedelta(days=30)
 
-# --- Telegram Handlers ---
+# --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await accueil(update, context)
 
@@ -299,6 +297,7 @@ async def backtest_menu_callback(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode=ParseMode.MARKDOWN
     )
 
+# --- Backtest avec prise de profit partielle et trailing stop sur le reste ---
 async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data.replace("backtest_run_", "")
     symbol, period_code = data.rsplit("_", 1)
@@ -316,7 +315,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     df = compute_indicators(df)
 
-    # Génère les signaux à 8h (date, type, prix, TP, SL)
     signals = []
     df_8h = df[df.index.hour == 8]
     df_8h = df_8h.groupby(df_8h.index.date).first()
@@ -334,7 +332,8 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "signal": signal,
             "close": close,
             "stop_loss": stop_loss,
-            "take_profit": take_profit
+            "take_profit": take_profit,
+            "atr": latest["ATR"]
         })
 
     trades = []
@@ -350,60 +349,105 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         entry_price = sig["close"]
         stop_loss = sig["stop_loss"]
         take_profit = sig["take_profit"]
+        atr = sig["atr"]
 
-        # Parcours les bougies suivantes jusqu'à TP, SL ou signal opposé à 8h
+        # Prise de profit partielle à +1 ATR, trailing stop sur le reste
+        partial_tp = entry_price + atr if trade_type == "BUY" else entry_price - atr
+        trailing_active = False
+        trailing_stop = None
+        partial_taken = False
+
+        size_left = 1.0
+        pnl_partial = 0
+        pnl_final = 0
+
         df_after = df[df.index > entry_date]
         exit_reason = None
         exit_date = None
         exit_price = None
 
         for idx, row in df_after.iterrows():
-            # 1. Check TP/SL
-            if trade_type == "BUY":
-                if row["low"] <= stop_loss:
-                    exit_reason = "SL"
-                    exit_date = idx
-                    exit_price = stop_loss
-                    break
-                if row["high"] >= take_profit:
-                    exit_reason = "TP"
-                    exit_date = idx
-                    exit_price = take_profit
-                    break
-            else:  # SELL
-                if row["high"] >= stop_loss:
-                    exit_reason = "SL"
-                    exit_date = idx
-                    exit_price = stop_loss
-                    break
-                if row["low"] <= take_profit:
-                    exit_reason = "TP"
-                    exit_date = idx
-                    exit_price = take_profit
-                    break
-            # 2. Check signal opposé à 8h
+            # Prise de profit partielle
+            if not partial_taken:
+                if (trade_type == "BUY" and row["high"] >= partial_tp) or (trade_type == "SELL" and row["low"] <= partial_tp):
+                    partial_taken = True
+                    size_left = 0.5
+                    pnl_partial = ((partial_tp - entry_price) / entry_price * 100) * 0.5 if trade_type == "BUY" else ((entry_price - partial_tp) / entry_price * 100) * 0.5
+                    trailing_active = True
+                    if trade_type == "BUY":
+                        trailing_stop = partial_tp - 0.5 * atr
+                    else:
+                        trailing_stop = partial_tp + 0.5 * atr
+            # TP/SL classiques
+            if (trade_type == "BUY" and row["low"] <= stop_loss):
+                pnl_final = ((stop_loss - entry_price) / entry_price * 100) * size_left
+                exit_reason = "SL"
+                exit_date = idx
+                exit_price = stop_loss
+                break
+            if (trade_type == "SELL" and row["high"] >= stop_loss):
+                pnl_final = ((entry_price - stop_loss) / entry_price * 100) * size_left
+                exit_reason = "SL"
+                exit_date = idx
+                exit_price = stop_loss
+                break
+            if (trade_type == "BUY" and row["high"] >= take_profit):
+                pnl_final = ((take_profit - entry_price) / entry_price * 100) * size_left
+                exit_reason = "TP"
+                exit_date = idx
+                exit_price = take_profit
+                break
+            if (trade_type == "SELL" and row["low"] <= take_profit):
+                pnl_final = ((entry_price - take_profit) / entry_price * 100) * size_left
+                exit_reason = "TP"
+                exit_date = idx
+                exit_price = take_profit
+                break
+            # Trailing stop sur la moitié restante
+            if trailing_active:
+                if trade_type == "BUY":
+                    if row["high"] > trailing_stop + 0.5 * atr:
+                        trailing_stop = row["high"] - 0.5 * atr
+                    if row["low"] <= trailing_stop:
+                        pnl_final = ((trailing_stop - entry_price) / entry_price * 100) * size_left
+                        exit_reason = "Trailing Stop"
+                        exit_date = idx
+                        exit_price = trailing_stop
+                        break
+                else:
+                    if row["low"] < trailing_stop - 0.5 * atr:
+                        trailing_stop = row["low"] + 0.5 * atr
+                    if row["high"] >= trailing_stop:
+                        pnl_final = ((entry_price - trailing_stop) / entry_price * 100) * size_left
+                        exit_reason = "Trailing Stop"
+                        exit_date = idx
+                        exit_price = trailing_stop
+                        break
+            # Signal opposé à 8h
             if idx.hour == 8 and idx.date() != entry_date.date():
-                # Cherche dans signals si signal opposé à cette date
                 opp = "📉 SELL" if trade_type == "BUY" else "📈 BUY"
                 next_sig = next((s for s in signals if s["date"] == idx and s["signal"] == opp), None)
                 if next_sig:
+                    if trade_type == "BUY":
+                        pnl_final = ((row["open"] - entry_price) / entry_price * 100) * size_left
+                    else:
+                        pnl_final = ((entry_price - row["open"]) / entry_price * 100) * size_left
                     exit_reason = "Signal Opposé"
                     exit_date = idx
                     exit_price = row["open"]
                     break
 
-        # Si pas de sortie, on sort à la dernière bougie
         if exit_reason is None:
             last_idx = df_after.index[-1] if not df_after.empty else df.index[-1]
+            if trade_type == "BUY":
+                pnl_final = ((df.loc[last_idx]["close"] - entry_price) / entry_price * 100) * size_left
+            else:
+                pnl_final = ((entry_price - df.loc[last_idx]["close"]) / entry_price * 100) * size_left
             exit_reason = "Fin période"
             exit_date = last_idx
             exit_price = df.loc[exit_date]["close"]
 
-        # Calcul du P&L
-        if trade_type == "BUY":
-            pnl = (exit_price - entry_price) / entry_price * 100
-        else:
-            pnl = (entry_price - exit_price) / entry_price * 100
+        pnl = pnl_partial + pnl_final
 
         trades.append({
             "type": trade_type,
@@ -415,12 +459,9 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "pnl": pnl
         })
 
-        # Avance à la prochaine bougie 8h après la sortie
-        # (évite de ré-ouvrir un trade sur le même signal)
         next_signals = [j for j, s in enumerate(signals) if s["date"] > exit_date]
         i = next_signals[0] if next_signals else len(signals)
 
-    # Statistiques
     nb_trades = len(trades)
     trades_gagnants = [t for t in trades if t["pnl"] > 0]
     trades_perdants = [t for t in trades if t["pnl"] <= 0]
@@ -438,7 +479,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if drawdown > max_drawdown:
             max_drawdown = drawdown
 
-    # Affichage
     msg = (
         f"📊 *Backtest {symbol} sur {period_code}*\n"
         f"╭─────────────────────────────╮\n"
@@ -451,7 +491,7 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         f"│ ⚖️ P&L moyen/trade : *{pnl_moyen:.2f}%*\n"
         f"│ 📉 Max drawdown : *{max_drawdown:.2f}%*\n"
         f"╰─────────────────────────────╯\n"
-        f"_Sortie sur TP, SL ou signal opposé à 8h UTC._"
+        f"_Prise de profit partielle à +1 ATR, trailing stop sur le reste._"
     )
     keyboard = [
         [InlineKeyboardButton("⬅️ Retour", callback_data=f"backtest_{symbol}")],
@@ -495,7 +535,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             text="❌ Une erreur est survenue. Merci de réessayer plus tard."
         )
 
-# --- Lancement bot ---
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
