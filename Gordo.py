@@ -272,8 +272,8 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     if signal != "🤝 HOLD":
         msg += (
-            f"\n🎯 *Take Profit 1* (50%) : `{tp1:.4f}`\n"
-            f"🎯 *Take Profit 2* (reste) : {tp2}\n"
+            f"\n🎯 *Take Profit 1* (50%) : `{tp1:.4f}` (ATR={latest['ATR']:.2f})\n"
+            f"🎯 *Take Profit 2* (reste) : {tp2} (ATR={latest['ATR']:.2f})\n"
             f"🛑 *Stop Loss* : `{stop_loss:.4f}`"
         )
 
