@@ -48,7 +48,7 @@ def get_binance_ohlc(symbol, interval="1h", limit=1000):
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         df.set_index("open_time", inplace=True)
-        # Ajout : rendre l'index tz-aware en UTC
+        # Localise l'index en UTC si ce n'est pas déjà fait
         if df.index.tz is None:
             df.index = df.index.tz_localize('UTC')
         return df
@@ -298,7 +298,6 @@ async def backtest_menu_callback(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode=ParseMode.MARKDOWN
     )
 
-# --- Exécution du backtest : uniquement la bougie à 8h UTC chaque jour ---
 async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data.replace("backtest_run_", "")
     symbol, period_code = data.rsplit("_", 1)
@@ -311,7 +310,8 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # S'assurer que l'index est tz-aware
     if df.index.tz is None:
         df.index = df.index.tz_localize('UTC')
-    df = df[df.index >= pd.Timestamp(start_date, tz='UTC')]
+    # Comparer avec start_date (déjà tz-aware)
+    df = df[df.index >= start_date]
     if len(df) < 50:
         await update.callback_query.message.reply_text("❌ Pas assez de données pour cette période.")
         return
@@ -319,12 +319,16 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Sélectionner la bougie de chaque jour à 8h UTC
     df_8h = df[df.index.hour == 8]
+    # Garder une bougie par jour (au cas où il y en aurait plusieurs à 8h)
     df_8h = df_8h.groupby(df_8h.index.date).first()
 
     buy_signals = 0
     sell_signals = 0
     for idx in df_8h.index:
+        # Recréer la date à 8h UTC
         dt_8h = pd.Timestamp(idx).replace(hour=8, minute=0, second=0, microsecond=0, tzinfo=df.index.tz)
+        if dt_8h < df.index[0]:
+            continue  # Trop tôt, pas assez d'historique
         subdf = df.loc[df.index <= dt_8h]
         if len(subdf) < 50:
             continue
