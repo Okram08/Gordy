@@ -9,6 +9,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 )
+from datetime import datetime, timedelta
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s:%(message)s")
@@ -31,7 +32,7 @@ TOP_TOKENS = [
 ]
 
 # --- Fonctions données et indicateurs ---
-def get_binance_ohlc(symbol, interval="1h", limit=250):
+def get_binance_ohlc(symbol, interval="1h", limit=1000):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     try:
@@ -129,12 +130,8 @@ def generate_signal_and_score(df):
 
     return signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest
 
-# --- NOUVELLE FONCTION POUR LES CRITÈRES VALIDÉS ---
+# --- Critères validés ---
 def get_criteria_status(latest, signal_type):
-    """
-    Retourne une liste (label, bool) indiquant si chaque critère est validé
-    pour le type de signal (BUY ou SELL ou HOLD).
-    """
     if signal_type == "BUY":
         criteria = [
             ("Prix > SMA200", latest["close"] > latest["SMA200"]),
@@ -156,7 +153,6 @@ def get_criteria_status(latest, signal_type):
             ("Volume > 1.2x volume moyen", latest["volume"] > 1.2 * latest["volume_mean"]),
         ]
     else:
-        # Pour HOLD, on affiche les deux listes
         criteria = [
             ("Prix > SMA200", latest["close"] > latest["SMA200"]),
             ("EMA10 > SMA20", latest["EMA10"] > latest["SMA20"]),
@@ -172,6 +168,20 @@ def get_criteria_status(latest, signal_type):
             ("MACD < 0", latest["MACD"] < 0),
         ]
     return criteria
+
+# --- Fonctions utilitaires pour le backtest ---
+def get_start_date(period_code):
+    now = datetime.utcnow()
+    if period_code == "1m":
+        return now - timedelta(days=30)
+    elif period_code == "3m":
+        return now - timedelta(days=90)
+    elif period_code == "6m":
+        return now - timedelta(days=180)
+    elif period_code == "1y":
+        return now - timedelta(days=365)
+    else:
+        return now - timedelta(days=30)
 
 # --- Telegram Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -223,7 +233,7 @@ async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
-# --- MODIFICATION PRINCIPALE ICI ---
+# --- Analyse détaillée + bouton Backtest ---
 async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = update.callback_query.data.replace("analyse_", "")
     name = next((n for n, s in TOP_TOKENS if s == symbol), symbol)
@@ -262,8 +272,65 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"🛑 *Stop Loss* : `{stop_loss:.4f}`"
         )
 
+    # Ajout du bouton Backtest
     keyboard = [
+        [InlineKeyboardButton("Backtest 🔄", callback_data=f"backtest_{symbol}")],
         [InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]
+    ]
+    await update.callback_query.message.reply_text(
+        msg,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# --- Menu choix période Backtest ---
+async def backtest_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    symbol = update.callback_query.data.replace("backtest_", "")
+    keyboard = [
+        [InlineKeyboardButton("1 mois", callback_data=f"backtest_run_{symbol}_1m")],
+        [InlineKeyboardButton("3 mois", callback_data=f"backtest_run_{symbol}_3m")],
+        [InlineKeyboardButton("6 mois", callback_data=f"backtest_run_{symbol}_6m")],
+        [InlineKeyboardButton("1 an", callback_data=f"backtest_run_{symbol}_1y")],
+        [InlineKeyboardButton("⬅️ Retour", callback_data=f"analyse_{symbol}")]
+    ]
+    await update.callback_query.message.reply_text(
+        "🕒 Choisis la période de backtest :",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# --- Exécution du backtest ---
+async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = update.callback_query.data.replace("backtest_run_", "")
+    symbol, period_code = data.rsplit("_", 1)
+    start_date = get_start_date(period_code)
+    df = get_binance_ohlc(symbol, interval="1h", limit=1000)
+    if df is None or len(df) < 50:
+        await update.callback_query.message.reply_text("❌ Données insuffisantes pour le backtest.")
+        return
+    df = df[df.index >= pd.Timestamp(start_date)]
+    if len(df) < 50:
+        await update.callback_query.message.reply_text("❌ Pas assez de données pour cette période.")
+        return
+    df = compute_indicators(df)
+    buy_signals = 0
+    sell_signals = 0
+    for i in range(50, len(df)):  # commence après 50 bougies pour fiabilité des indicateurs
+        subdf = df.iloc[:i+1]
+        signal, *_ = generate_signal_and_score(subdf)
+        if signal == "📈 BUY":
+            buy_signals += 1
+        elif signal == "📉 SELL":
+            sell_signals += 1
+    msg = (
+        f"📊 *Backtest {symbol} sur {period_code}*\n"
+        f"Nombre de signaux BUY : {buy_signals}\n"
+        f"Nombre de signaux SELL : {sell_signals}\n"
+        f"Période : depuis {start_date.date()} ({len(df)} bougies)"
+    )
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Retour", callback_data=f"backtest_{symbol}")],
+        [InlineKeyboardButton("🏠 Accueil", callback_data="retour_accueil")]
     ]
     await update.callback_query.message.reply_text(
         msg,
@@ -310,6 +377,8 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu_|retour_"))
     app.add_handler(CallbackQueryHandler(analyse_token_callback, pattern="^analyse_"))
+    app.add_handler(CallbackQueryHandler(backtest_menu_callback, pattern="^backtest_((?!run).)+$"))
+    app.add_handler(CallbackQueryHandler(backtest_run_callback, pattern="^backtest_run_"))
     app.add_error_handler(error_handler)
     logger.info("Bot lancé et opérationnel.")
     app.run_polling()
