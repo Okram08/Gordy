@@ -134,6 +134,44 @@ def generate_signal_and_score(df):
 
     return signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest
 
+def get_criteria_status(latest, signal_type):
+    if signal_type == "BUY":
+        criteria = [
+            ("Prix > SMA200", latest["close"] > latest["SMA200"]),
+            ("EMA10 > SMA20", latest["EMA10"] > latest["SMA20"]),
+            ("RSI < 40", latest["RSI"] < 40),
+            ("Prix < Bande Basse Bollinger", latest["close"] < latest["BB_lower"]),
+            ("MACD > 0", latest["MACD"] > 0),
+            ("ADX > 20", latest["ADX"] > 20),
+            ("Volume > 1.2x volume moyen", latest["volume"] > 1.2 * latest["volume_mean"]),
+        ]
+    elif signal_type == "SELL":
+        criteria = [
+            ("Prix < SMA200", latest["close"] < latest["SMA200"]),
+            ("EMA10 < SMA20", latest["EMA10"] < latest["SMA20"]),
+            ("RSI > 60", latest["RSI"] > 60),
+            ("Prix > Bande Haute Bollinger", latest["close"] > latest["BB_upper"]),
+            ("MACD < 0", latest["MACD"] < 0),
+            ("ADX > 20", latest["ADX"] > 20),
+            ("Volume > 1.2x volume moyen", latest["volume"] > 1.2 * latest["volume_mean"]),
+        ]
+    else:
+        criteria = [
+            ("Prix > SMA200", latest["close"] > latest["SMA200"]),
+            ("EMA10 > SMA20", latest["EMA10"] > latest["SMA20"]),
+            ("RSI < 40", latest["RSI"] < 40),
+            ("Prix < Bande Basse Bollinger", latest["close"] < latest["BB_lower"]),
+            ("MACD > 0", latest["MACD"] > 0),
+            ("ADX > 20", latest["ADX"] > 20),
+            ("Volume > 1.2x volume moyen", latest["volume"] > 1.2 * latest["volume_mean"]),
+            ("Prix < SMA200", latest["close"] < latest["SMA200"]),
+            ("EMA10 < SMA20", latest["EMA10"] < latest["SMA20"]),
+            ("RSI > 60", latest["RSI"] > 60),
+            ("Prix > Bande Haute Bollinger", latest["close"] > latest["BB_upper"]),
+            ("MACD < 0", latest["MACD"] < 0),
+        ]
+    return criteria
+
 def get_start_date(period_code):
     now = datetime.now(timezone.utc)
     if period_code == "1m":
@@ -146,6 +184,118 @@ def get_start_date(period_code):
         return now - timedelta(days=365)
     else:
         return now - timedelta(days=30)
+
+# --- Handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await accueil(update, context)
+
+async def accueil(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📊 Analyse", callback_data="menu_analyse")],
+        [InlineKeyboardButton("🏆 Classement", callback_data="menu_classement")],
+        [InlineKeyboardButton("ℹ️ Aide", callback_data="menu_help")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="👋 Bienvenue sur le bot d'analyse crypto de Luca !",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "ℹ️ Ce bot fournit des signaux d'achat et de vente basés sur des indicateurs techniques.\n"
+        "Utilisez les boutons pour interagir.",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    if data == "menu_analyse":
+        await analyse_callback(update, context)
+    elif data == "menu_classement":
+        await classement_callback(update, context)
+    elif data == "menu_help":
+        await help_command(update, context)
+    elif data == "retour_accueil":
+        await accueil(update, context)
+
+async def analyse_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton(name.title(), callback_data=f"analyse_{symbol}")]
+        for name, symbol in TOP_TOKENS
+    ]
+    keyboard.append([InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")])
+    await update.callback_query.message.reply_text(
+        "📊 Sélectionnez une crypto à analyser :",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    symbol = update.callback_query.data.replace("analyse_", "")
+    name = next((n for n, s in TOP_TOKENS if s == symbol), symbol)
+    df = get_binance_ohlc(symbol)
+    if df is None or len(df) < 50:
+        await update.callback_query.message.reply_text("❌ Données insuffisantes.")
+        return
+    df = compute_indicators(df)
+    signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest = generate_signal_and_score(df)
+
+    if signal == "📈 BUY":
+        criteria = get_criteria_status(latest, "BUY")
+    elif signal == "📉 SELL":
+        criteria = get_criteria_status(latest, "SELL")
+    else:
+        criteria = get_criteria_status(latest, "HOLD")
+
+    indicator_status = ""
+    for label, valid in criteria:
+        icon = "✅" if valid else "❌"
+        indicator_status += f"{icon} {label}\n"
+
+    msg = (
+        f"*Analyse de {name.title()} ({symbol})*\n"
+        f"Prix actuel : `{latest['close']:.2f}` USDT\n"
+        f"Signal : {signal}\n"
+        f"Score : `{score}/7` | Confiance : `{confiance}/10` ({confiance_txt})\n"
+        f"_{commentaire}_\n\n"
+        f"*Critères validés :*\n{indicator_status}\n"
+    )
+
+    if signal != "🤝 HOLD":
+        msg += (
+            f"\n🎯 *Take Profit* : `{take_profit:.4f}`\n"
+            f"🛑 *Stop Loss* : `{stop_loss:.4f}`"
+        )
+
+    keyboard = [
+        [InlineKeyboardButton("Backtest 🔄", callback_data=f"backtest_{symbol}")],
+        [InlineKeyboardButton("⬅️ Retour", callback_data="retour_accueil")]
+    ]
+    await update.callback_query.message.reply_text(
+        msg,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def backtest_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    symbol = update.callback_query.data.replace("backtest_", "")
+    keyboard = [
+        [InlineKeyboardButton("1 mois", callback_data=f"backtest_run_{symbol}_1m")],
+        [InlineKeyboardButton("3 mois", callback_data=f"backtest_run_{symbol}_3m")],
+        [InlineKeyboardButton("6 mois", callback_data=f"backtest_run_{symbol}_6m")],
+        [InlineKeyboardButton("1 an", callback_data=f"backtest_run_{symbol}_1y")],
+        [InlineKeyboardButton("⬅️ Retour", callback_data=f"analyse_{symbol}")]
+    ]
+    await update.callback_query.message.reply_text(
+        "🕒 Choisis la période de backtest :",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 # --- Backtest avec prise de profit partielle et trailing stop sur le reste ---
 async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -207,7 +357,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         trailing_stop = None
         partial_taken = False
 
-        size_full = 1.0
         size_left = 1.0
         pnl_partial = 0
         pnl_final = 0
@@ -229,7 +378,6 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
                         trailing_stop = partial_tp - 0.5 * atr
                     else:
                         trailing_stop = partial_tp + 0.5 * atr
-                    # Continue pour la partie restante
             # TP/SL classiques
             if (trade_type == "BUY" and row["low"] <= stop_loss):
                 pnl_final = ((stop_loss - entry_price) / entry_price * 100) * size_left
@@ -387,7 +535,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             text="❌ Une erreur est survenue. Merci de réessayer plus tard."
         )
 
-# --- Lancement bot ---
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
