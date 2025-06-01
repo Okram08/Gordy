@@ -110,7 +110,9 @@ def generate_signal_and_score(df):
         )
         recent_lows = df["low"].iloc[-20:]
         stop_loss = min(recent_lows.min(), entry - 1.5 * atr)
-        take_profit = entry + 2 * atr
+        tp1 = entry + atr
+        tp2 = "Trailing stop à 0.5 ATR sous le plus haut atteint"
+        take_profit = entry + 2 * atr  # pour compatibilité backtest
     elif score_sell >= 4 and score_sell > score_buy:
         signal = "📉 SELL"
         score = score_sell
@@ -123,16 +125,18 @@ def generate_signal_and_score(df):
         )
         recent_highs = df["high"].iloc[-20:]
         stop_loss = max(recent_highs.max(), entry + 1.5 * atr)
-        take_profit = entry - 2 * atr
+        tp1 = entry - atr
+        tp2 = "Trailing stop à 0.5 ATR au-dessus du plus bas atteint"
+        take_profit = entry - 2 * atr  # pour compatibilité backtest
     else:
         signal = "🤝 HOLD"
         score = max(score_buy, score_sell)
         commentaire = "Aucun signal fort."
         confiance = int((score / 7) * 10)
         confiance_txt = "Faible"
-        stop_loss = take_profit = None
+        stop_loss = take_profit = tp1 = tp2 = None
 
-    return signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest
+    return signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest, tp1, tp2
 
 def get_criteria_status(latest, signal_type):
     if signal_type == "BUY":
@@ -243,7 +247,7 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
         await update.callback_query.message.reply_text("❌ Données insuffisantes.")
         return
     df = compute_indicators(df)
-    signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest = generate_signal_and_score(df)
+    signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest, tp1, tp2 = generate_signal_and_score(df)
 
     if signal == "📈 BUY":
         criteria = get_criteria_status(latest, "BUY")
@@ -268,7 +272,8 @@ async def analyse_token_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     if signal != "🤝 HOLD":
         msg += (
-            f"\n🎯 *Take Profit* : `{take_profit:.4f}`\n"
+            f"\n🎯 *Take Profit 1* (50%) : `{tp1:.4f}`\n"
+            f"🎯 *Take Profit 2* (reste) : {tp2}\n"
             f"🛑 *Stop Loss* : `{stop_loss:.4f}`"
         )
 
@@ -297,7 +302,7 @@ async def backtest_menu_callback(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode=ParseMode.MARKDOWN
     )
 
-# --- Backtest avec prise de profit partielle et trailing stop sur le reste ---
+# --- Backtest (reprend la logique prise partielle + trailing stop sur le reste) ---
 async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data.replace("backtest_run_", "")
     symbol, period_code = data.rsplit("_", 1)
@@ -325,7 +330,7 @@ async def backtest_run_callback(update: Update, context: ContextTypes.DEFAULT_TY
         subdf = df.loc[df.index <= dt_8h]
         if len(subdf) < 50:
             continue
-        signal, _, _, stop_loss, take_profit, _, _, latest = generate_signal_and_score(subdf)
+        signal, _, _, stop_loss, take_profit, _, _, latest, tp1, tp2 = generate_signal_and_score(subdf)
         close = latest["close"]
         signals.append({
             "date": dt_8h,
@@ -510,7 +515,7 @@ async def classement_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         df = get_binance_ohlc(symbol)
         if df is None: continue
         df = compute_indicators(df)
-        signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest = generate_signal_and_score(df)
+        signal, score, commentaire, stop_loss, take_profit, confiance, confiance_txt, latest, tp1, tp2 = generate_signal_and_score(df)
         if signal != "🤝 HOLD":
             results.append((name.title(), signal, score, confiance, commentaire))
 
